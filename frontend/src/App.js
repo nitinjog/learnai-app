@@ -1,588 +1,763 @@
 import React, { useState, useCallback } from 'react';
-import axios from 'axios';
-import ReactMarkdown from 'react-markdown';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell } from 'recharts';
 
-const API = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const API_URL = process.env.REACT_APP_API_URL || 'https://learnai-backend.onrender.com';
 
-const uid = () => {
-  let id = localStorage.getItem('learnai_uid');
-  if (!id) { id = Math.random().toString(36).slice(2) + Date.now(); localStorage.setItem('learnai_uid', id); }
-  return id;
+async function apiPost(endpoint, data) {
+  const res = await fetch(`${API_URL}${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Request failed' }));
+    throw new Error(err.detail || `Request failed (${res.status})`);
+  }
+  return res.json();
+}
+
+function saveScore(topic, score) {
+  try {
+    const all = JSON.parse(localStorage.getItem('lai_scores') || '{}');
+    const k = topic.toLowerCase().slice(0, 40);
+    all[k] = [...(all[k] || []), score];
+    localStorage.setItem('lai_scores', JSON.stringify(all));
+  } catch (e) {}
+}
+
+function getScores(topic) {
+  try {
+    const all = JSON.parse(localStorage.getItem('lai_scores') || '{}');
+    return (all[topic.toLowerCase().slice(0, 40)] || []).sort((a, b) => a - b);
+  } catch (e) { return []; }
+}
+
+// ── Styles ─────────────────────────────────────────────────────────────────────
+const css = `
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #080810; color: #e2e8f0; font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .page { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; }
+  .card { background: rgba(16,16,40,0.95); border: 1px solid rgba(99,102,241,0.35); border-radius: 20px; padding: 40px; width: 100%; max-width: 860px; box-shadow: 0 20px 60px rgba(0,0,0,0.6); animation: fadeIn .4s ease; }
+  .card-wide { max-width: 980px; }
+  h1.logo { font-size: clamp(2rem,6vw,3.5rem); font-weight: 900; background: linear-gradient(135deg,#818cf8,#c084fc,#38bdf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .subtitle { color: #94a3b8; font-size: 1.05rem; margin: 8px 0 24px; }
+  .badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; background: rgba(99,102,241,0.12); color: #818cf8; border: 1px solid rgba(99,102,241,0.25); margin: 3px; }
+  .badge-yt { background: rgba(255,0,0,0.1); color: #ff4444; border-color: rgba(255,0,0,0.25); }
+  .badge-course { background: rgba(34,197,94,0.1); color: #22c55e; border-color: rgba(34,197,94,0.25); }
+  .input-row { display: flex; gap: 10px; margin-top: 8px; }
+  input[type=text] { flex: 1; background: rgba(99,102,241,0.08); border: 1.5px solid rgba(99,102,241,0.4); border-radius: 12px; padding: 14px 18px; color: #e2e8f0; font-size: 1rem; outline: none; font-family: inherit; }
+  input[type=text]:focus { border-color: #6366f1; }
+  .btn { background: linear-gradient(135deg,#6366f1,#8b5cf6); border: none; border-radius: 12px; padding: 14px 24px; color: #fff; font-weight: 700; font-size: 1rem; cursor: pointer; font-family: inherit; white-space: nowrap; transition: opacity .15s; }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+  .btn:not(:disabled):hover { opacity: 0.9; }
+  .btn-sm { background: rgba(99,102,241,0.12); border: 1px solid rgba(99,102,241,0.3); border-radius: 8px; padding: 8px 14px; color: #818cf8; font-weight: 600; font-size: 0.82rem; cursor: pointer; font-family: inherit; transition: background .15s; }
+  .btn-sm:hover { background: rgba(99,102,241,0.2); }
+  .btn-green { background: linear-gradient(135deg,#22c55e,#16a34a); }
+  .btn-ghost { background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.35); border-radius: 8px; padding: 8px 14px; color: #22c55e; font-weight: 600; font-size: 0.82rem; cursor: pointer; font-family: inherit; }
+  .btn-link { background: none; border: none; cursor: pointer; color: #818cf8; font-size: 0.82rem; padding: 0; font-family: inherit; text-decoration: underline; }
+  label.lbl { display: block; color: #94a3b8; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; margin-bottom: 8px; }
+  .resource-card { background: rgba(10,10,28,0.8); border: 1.5px solid rgba(99,102,241,0.18); border-radius: 14px; overflow: hidden; cursor: pointer; transition: border-color .15s, background .15s; display: flex; flex-direction: column; }
+  .resource-card:hover { border-color: rgba(99,102,241,0.45); background: rgba(16,16,44,0.9); }
+  .resource-card.sel { border-color: #6366f1; background: rgba(99,102,241,0.1); }
+  .resource-card.sel-course { border-color: #22c55e; background: rgba(34,197,94,0.06); }
+  .video-thumb { width: 100%; aspect-ratio: 16/9; background: rgba(99,102,241,0.08); object-fit: cover; display: block; }
+  .video-thumb-placeholder { width: 100%; aspect-ratio: 16/9; background: rgba(10,10,30,0.8); display: flex; align-items: center; justify-content: center; font-size: 2.5rem; }
+  .card-body { padding: 12px 14px; flex: 1; display: flex; flex-direction: column; gap: 6px; }
+  .card-title { font-weight: 600; font-size: 0.88rem; color: #e2e8f0; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .card-desc { color: #64748b; font-size: 0.78rem; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .card-footer { padding: 0 14px 12px; display: flex; align-items: center; justify-content: space-between; }
+  .platform-badge { font-size: 0.7rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; }
+  .check-circle { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #4b5563; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 11px; color: #fff; transition: all .15s; }
+  .check-circle.on-blue { background: #6366f1; border-color: #6366f1; }
+  .check-circle.on-green { background: #22c55e; border-color: #22c55e; }
+  .grid-resources { display: grid; grid-template-columns: repeat(auto-fill,minmax(220px,1fr)); gap: 12px; }
+  .stat-card { background: rgba(10,10,20,0.8); border-radius: 14px; padding: 18px; text-align: center; }
+  .stat-val { font-size: 1.6rem; font-weight: 800; margin: 6px 0 4px; }
+  .stat-sub { color: #64748b; font-size: 0.75rem; }
+  .stat-lbl { color: #64748b; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+  .progress-bar { height: 6px; background: rgba(99,102,241,0.15); border-radius: 3px; overflow: hidden; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg,#6366f1,#8b5cf6); border-radius: 3px; transition: width .5s; }
+  .phase-card { background: rgba(10,10,28,0.7); border: 1px solid rgba(99,102,241,0.2); border-radius: 16px; padding: 20px 24px; margin-bottom: 20px; }
+  .phase-num { width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg,#6366f1,#8b5cf6); display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 0.85rem; flex-shrink: 0; }
+  .resource-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px; background: rgba(99,102,241,0.04); border: 1px solid rgba(99,102,241,0.12); border-radius: 10px; margin-bottom: 8px; }
+  .resource-thumb { width: 80px; height: 52px; border-radius: 6px; object-fit: cover; flex-shrink: 0; }
+  .resource-thumb-placeholder { width: 80px; height: 52px; border-radius: 6px; background: rgba(99,102,241,0.12); display: flex; align-items: center; justify-content: center; font-size: 1.4rem; flex-shrink: 0; }
+  .opt { border-radius: 10px; padding: 12px 14px; cursor: pointer; display: flex; align-items: center; gap: 10px; margin-bottom: 10px; border: 1.5px solid rgba(99,102,241,0.18); background: rgba(99,102,241,0.06); transition: background .1s; }
+  .opt:hover { background: rgba(99,102,241,0.14); }
+  .opt.picked { background: rgba(99,102,241,0.22); border-color: #6366f1; }
+  .opt.correct { background: rgba(34,197,94,0.14); border-color: rgba(34,197,94,0.5); }
+  .opt.wrong { background: rgba(239,68,68,0.12); border-color: rgba(239,68,68,0.5); }
+  .letter { width: 28px; height: 28px; border-radius: 6px; background: rgba(99,102,241,0.18); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.82rem; flex-shrink: 0; }
+  .expl { background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.25); border-radius: 10px; padding: 14px; margin-bottom: 16px; }
+  .bench-bar { height: 8px; border-radius: 4px; margin-top: 4px; transition: width 1s; }
+  .chart-bars { display: flex; align-items: flex-end; gap: 10px; height: 140px; padding: 0 8px; }
+  .chart-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; }
+  .chart-bar { width: 100%; border-radius: 6px 6px 0 0; transition: height 1s; }
+  .chart-label { font-size: 0.7rem; color: #64748b; text-align: center; }
+  .chart-value { font-size: 0.8rem; font-weight: 700; }
+  .err { color: #f87171; font-size: 0.88rem; margin-top: 8px; }
+  .orb { position: fixed; border-radius: 50%; filter: blur(80px); pointer-events: none; z-index: 0; }
+  .z1 { position: relative; z-index: 1; }
+  .flex { display: flex; }
+  .flex-center { display: flex; align-items: center; }
+  .gap6 { gap: 6px; }
+  .gap8 { gap: 8px; }
+  .gap12 { gap: 12px; }
+  .gap16 { gap: 16px; }
+  .wrap { flex-wrap: wrap; }
+  .justify-between { justify-content: space-between; }
+  .justify-center { justify-content: center; }
+  .mb6 { margin-bottom: 6px; }
+  .mb8 { margin-bottom: 8px; }
+  .mb12 { margin-bottom: 12px; }
+  .mb16 { margin-bottom: 16px; }
+  .mb20 { margin-bottom: 20px; }
+  .mb24 { margin-bottom: 24px; }
+  .mt12 { margin-top: 12px; }
+  .mt16 { margin-top: 16px; }
+  .mt24 { margin-top: 24px; }
+  .mt32 { margin-top: 32px; }
+  .spinner { width: 48px; height: 48px; border: 4px solid rgba(99,102,241,0.2); border-top-color: #6366f1; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 20px; }
+  .sticky-header { position: sticky; top: 0; z-index: 10; background: rgba(8,8,16,0.96); backdrop-filter: blur(12px); border-bottom: 1px solid rgba(99,102,241,0.18); padding: 12px 24px; }
+  .section-tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+  .tab-btn { background: rgba(99,102,241,0.07); border: 1px solid rgba(99,102,241,0.18); border-radius: 10px; padding: 10px 18px; color: #94a3b8; font-weight: 600; font-size: 0.88rem; cursor: pointer; font-family: inherit; transition: all .15s; }
+  .tab-btn.active { background: rgba(99,102,241,0.2); border-color: #6366f1; color: #e2e8f0; }
+  .skills-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .skill-chip { background: rgba(56,189,248,0.08); border: 1px solid rgba(56,189,248,0.2); border-radius: 20px; padding: 5px 14px; color: #38bdf8; font-size: 0.8rem; font-weight: 600; }
+  .next-chip { background: rgba(139,92,246,0.08); border: 1px solid rgba(139,92,246,0.2); border-radius: 20px; padding: 5px 14px; color: #a78bfa; font-size: 0.8rem; font-weight: 600; }
+  .loading-steps { display: flex; flex-direction: column; gap: 10px; margin-top: 24px; max-width: 360px; }
+  .loading-step { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px; background: rgba(99,102,241,0.06); border: 1px solid rgba(99,102,241,0.15); }
+  .loading-step.done { border-color: rgba(34,197,94,0.3); background: rgba(34,197,94,0.05); }
+  .loading-step.active { border-color: rgba(99,102,241,0.4); animation: pulse 1.5s ease-in-out infinite; }
+  @media (max-width: 700px) { .card { padding: 20px; } .grid-resources { grid-template-columns: repeat(auto-fill,minmax(160px,1fr)); } .resource-thumb { width: 60px; height: 40px; } .chart-bars { height: 100px; } }
+`;
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+const PLATFORM_COLORS = {
+  'YouTube': { bg: 'rgba(255,0,0,0.12)', color: '#ff4444', border: 'rgba(255,0,0,0.25)' },
+  'Coursera': { bg: 'rgba(0,86,210,0.12)', color: '#4d9fff', border: 'rgba(0,86,210,0.25)' },
+  'edX': { bg: 'rgba(2,89,97,0.15)', color: '#00c8d4', border: 'rgba(2,89,97,0.3)' },
+  'Khan Academy': { bg: 'rgba(20,157,48,0.12)', color: '#14c44c', border: 'rgba(20,157,48,0.25)' },
+  'freeCodeCamp': { bg: 'rgba(10,10,35,0.5)', color: '#adbdff', border: 'rgba(99,102,241,0.3)' },
+  'Codecademy': { bg: 'rgba(31,198,120,0.1)', color: '#1fc678', border: 'rgba(31,198,120,0.25)' },
+  'MDN Web Docs': { bg: 'rgba(0,123,255,0.1)', color: '#5b9fff', border: 'rgba(0,123,255,0.25)' },
+  'W3Schools': { bg: 'rgba(4,150,82,0.1)', color: '#04bd65', border: 'rgba(4,150,82,0.25)' },
+  'GeeksforGeeks': { bg: 'rgba(11,150,59,0.1)', color: '#0bc453', border: 'rgba(11,150,59,0.25)' },
+  'Real Python': { bg: 'rgba(255,193,7,0.1)', color: '#ffc107', border: 'rgba(255,193,7,0.25)' },
+  'Kaggle': { bg: 'rgba(32,121,242,0.1)', color: '#20b2ff', border: 'rgba(32,121,242,0.25)' },
+  'default': { bg: 'rgba(99,102,241,0.1)', color: '#818cf8', border: 'rgba(99,102,241,0.25)' },
 };
 
-// ─── Animated Background ─────────────────────────────────────────────────────
-const BgParticles = () => (
-  <div style={{ position:'fixed', inset:0, zIndex:0, overflow:'hidden', pointerEvents:'none' }}>
-    {[...Array(20)].map((_, i) => (
-      <div key={i} style={{
-        position:'absolute',
-        width: Math.random()*3+1+'px',
-        height: Math.random()*3+1+'px',
-        background: `hsl(${220+i*8},80%,70%)`,
-        borderRadius:'50%',
-        left: Math.random()*100+'%',
-        top: Math.random()*100+'%',
-        opacity: Math.random()*0.4+0.1,
-        animation: `float ${5+Math.random()*10}s ease-in-out infinite alternate`,
-        animationDelay: Math.random()*5+'s'
-      }}/>
-    ))}
-    <style>{`
-      @keyframes float { from { transform: translateY(0px) rotate(0deg); } to { transform: translateY(-30px) rotate(180deg); } }
-      @keyframes pulse { 0%,100%{opacity:.3;transform:scale(1)} 50%{opacity:.6;transform:scale(1.05)} }
-      @keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
-    `}</style>
-  </div>
-);
+function getPlatformStyle(platform) {
+  return PLATFORM_COLORS[platform] || PLATFORM_COLORS['default'];
+}
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
-const S = {
-  page: { minHeight:'100vh', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'24px', position:'relative', zIndex:1 },
-  card: { background:'rgba(15,15,30,0.85)', backdropFilter:'blur(20px)', border:'1px solid rgba(99,102,241,0.3)', borderRadius:'20px', padding:'40px', width:'100%', maxWidth:'860px', boxShadow:'0 20px 60px rgba(0,0,0,0.5), 0 0 40px rgba(99,102,241,0.1)' },
-  title: { fontSize:'clamp(2rem,5vw,3.5rem)', fontWeight:800, background:'linear-gradient(135deg,#818cf8,#c084fc,#38bdf8)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent', marginBottom:'8px', lineHeight:1.1 },
-  subtitle: { color:'#94a3b8', fontSize:'1.1rem', marginBottom:'32px' },
-  input: { width:'100%', background:'rgba(99,102,241,0.1)', border:'1px solid rgba(99,102,241,0.4)', borderRadius:'12px', padding:'16px 20px', color:'#e2e8f0', fontSize:'1.1rem', outline:'none', transition:'all .3s', fontFamily:'Inter,sans-serif' },
-  btn: { background:'linear-gradient(135deg,#6366f1,#8b5cf6)', border:'none', borderRadius:'12px', padding:'14px 28px', color:'#fff', fontWeight:700, fontSize:'1rem', cursor:'pointer', transition:'all .3s', fontFamily:'Inter,sans-serif' },
-  btnSm: { background:'rgba(99,102,241,0.2)', border:'1px solid rgba(99,102,241,0.4)', borderRadius:'8px', padding:'8px 16px', color:'#818cf8', fontWeight:600, fontSize:'0.85rem', cursor:'pointer', transition:'all .3s' },
-  tag: { display:'inline-block', padding:'4px 12px', borderRadius:'20px', fontSize:'0.75rem', fontWeight:600, letterSpacing:'0.05em' },
-  section: { marginBottom:'24px' },
-  label: { color:'#94a3b8', fontSize:'0.85rem', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:'8px', display:'block' },
-  progress: { height:'6px', background:'rgba(99,102,241,0.2)', borderRadius:'3px', overflow:'hidden' },
-  chip: { background:'rgba(99,102,241,0.15)', border:'1px solid rgba(99,102,241,0.3)', borderRadius:'8px', padding:'10px 16px', cursor:'pointer', transition:'all .2s', display:'flex', alignItems:'center', gap:'10px' },
-};
+// ── Loading ────────────────────────────────────────────────────────────────────
+function Loading({ msg, steps = [] }) {
+  return (
+    <div className="page">
+      <div className="z1" style={{ textAlign: 'center', width: '100%', maxWidth: 420 }}>
+        <div className="spinner" />
+        <h2 style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: 8 }}>{msg}</h2>
+        {steps.length > 0 && (
+          <div className="loading-steps" style={{ margin: '0 auto' }}>
+            {steps.map((s, i) => (
+              <div key={i} className={`loading-step ${s.done ? 'done' : s.active ? 'active' : ''}`}>
+                <span style={{ fontSize: '1.1rem' }}>{s.done ? '✅' : s.active ? '⏳' : '⬜'}</span>
+                <span style={{ fontSize: '0.85rem', color: s.done ? '#22c55e' : s.active ? '#e2e8f0' : '#64748b' }}>{s.label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
-const diffColor = { beginner:'#22c55e', intermediate:'#f59e0b', advanced:'#ef4444' };
-
-// ─── Step 1: Landing / Topic Input ───────────────────────────────────────────
+// ── Step 1: Landing ────────────────────────────────────────────────────────────
 function LandingStep({ onSubmit }) {
   const [topic, setTopic] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadStep, setLoadStep] = useState(0);
+  const [err, setErr] = useState('');
+  const popular = ['Python Programming', 'Machine Learning', 'JavaScript', 'Web Development', 'Data Science', 'React', 'SQL', 'Chess Strategy'];
+
+  const go = async () => {
+    if (!topic.trim() || loading) return;
+    setLoading(true); setErr(''); setLoadStep(1);
+    try {
+      setLoadStep(2);
+      const data = await apiPost('/api/search-resources', { topic: topic.trim() });
+      setLoadStep(3);
+      onSubmit(data);
+    } catch (e) {
+      setErr('Error: ' + e.message);
+      setLoading(false);
+      setLoadStep(0);
+    }
+  };
+
+  const steps = [
+    { label: 'Searching YouTube for tutorials...', done: loadStep > 1, active: loadStep === 1 },
+    { label: 'Finding free courses & resources...', done: loadStep > 2, active: loadStep === 2 },
+    { label: 'Preparing your resource list...', done: loadStep > 3, active: loadStep === 3 },
+  ];
+
+  if (loading) return (
+    <><style>{css}</style>
+      <Loading msg={`Finding resources for "${topic}"...`} steps={steps} />
+    </>
+  );
+
+  return (
+    <div className="page">
+      <div className="orb" style={{ width: 400, height: 400, background: 'rgba(99,102,241,0.07)', left: '5%', top: '10%' }} />
+      <div className="orb" style={{ width: 350, height: 350, background: 'rgba(139,92,246,0.06)', right: '5%', bottom: '15%' }} />
+      <div className="card z1">
+        <div style={{ textAlign: 'center', marginBottom: 44 }}>
+          <div style={{ fontSize: '3.5rem', marginBottom: 12 }}>🧠</div>
+          <h1 className="logo">LearnAI</h1>
+          <p className="subtitle">Real YouTube videos & free courses, AI-curated into your personal learning path</p>
+          <div className="flex justify-center wrap gap8">
+            {['▶ Real YouTube Videos', '📚 Free Courses', '🤖 AI Learning Path', '📝 Skill Quiz'].map(f =>
+              <span key={f} className="badge">{f}</span>
+            )}
+          </div>
+        </div>
+
+        <label className="lbl">What do you want to learn today?</label>
+        <div className="input-row mb20">
+          <input type="text" placeholder="e.g. Machine Learning, JavaScript, Photography..."
+            value={topic} onChange={e => setTopic(e.target.value)} onKeyDown={e => e.key === 'Enter' && go()} />
+          <button className="btn" onClick={go} disabled={!topic.trim()}>🔍 Search</button>
+        </div>
+        {err && <div className="err mb12">{err}</div>}
+
+        <label className="lbl">Popular topics</label>
+        <div className="flex wrap gap8">
+          {popular.map(t => <button key={t} className="btn-sm" onClick={() => setTopic(t)}>{t}</button>)}
+        </div>
+
+        <div style={{ marginTop: 28, padding: 14, background: 'rgba(56,189,248,0.05)', border: '1px solid rgba(56,189,248,0.12)', borderRadius: 10 }}>
+          <div style={{ color: '#38bdf8', fontWeight: 700, fontSize: '0.82rem', marginBottom: 5 }}>💡 How it works</div>
+          <div style={{ color: '#64748b', fontSize: '0.8rem', lineHeight: 1.7 }}>
+            1. We search the web for real YouTube videos & free courses on your topic<br />
+            2. You pick which resources to include<br />
+            3. Gemini AI arranges them into a smart, progressive learning path<br />
+            4. Take a quiz to test your knowledge!
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Step 2: Resources ──────────────────────────────────────────────────────────
+function ResourcesStep({ data, onGenerate, onBack }) {
+  const [selVideos, setSelVideos] = useState(() => (data.videos || []).map((_, i) => i));
+  const [selCourses, setSelCourses] = useState(() => (data.courses || []).map((_, i) => i));
+  const [dur, setDur] = useState(60);
+  const [tab, setTab] = useState('videos');
+  const [loading, setLoading] = useState(false);
+  const [loadStep, setLoadStep] = useState(0);
   const [err, setErr] = useState('');
 
-  const handleSubmit = async () => {
-    if (!topic.trim()) return;
-    setLoading(true); setErr('');
+  const videos = data.videos || [];
+  const courses = data.courses || [];
+  const selCount = selVideos.length + selCourses.length;
+
+  const toggleVideo = i => setSelVideos(p => p.includes(i) ? p.filter(x => x !== i) : [...p, i]);
+  const toggleCourse = i => setSelCourses(p => p.includes(i) ? p.filter(x => x !== i) : [...p, i]);
+
+  const go = async () => {
+    if (selCount === 0 || loading) return;
+    const pickedVideos = selVideos.map(i => videos[i]);
+    const pickedCourses = selCourses.map(i => courses[i]);
+    setLoading(true); setErr(''); setLoadStep(1);
     try {
-      const res = await axios.post(`${API}/api/suggest-topics`, { topic });
-      onSubmit(res.data);
+      setLoadStep(2);
+      const path = await apiPost('/api/generate-path', {
+        topic: data.topic,
+        videos: pickedVideos,
+        courses: pickedCourses,
+        duration: dur,
+      });
+      setLoadStep(3);
+      onGenerate(path, pickedVideos, pickedCourses);
     } catch (e) {
-      setErr('Failed to fetch topic suggestions. Please check your connection.');
+      setErr('Error: ' + e.message);
+      setLoading(false);
+      setLoadStep(0);
     }
-    setLoading(false);
   };
 
+  const steps = [
+    { label: 'Analysing selected resources...', done: loadStep > 1, active: loadStep === 1 },
+    { label: 'Gemini AI creating your path...', done: loadStep > 2, active: loadStep === 2 },
+    { label: 'Generating quiz questions...', done: loadStep > 3, active: loadStep === 3 },
+  ];
+
+  if (loading) return (
+    <><style>{css}</style>
+      <Loading msg="Building your personalised learning path..." steps={steps} />
+    </>
+  );
+
   return (
-    <div style={S.page}>
-      <BgParticles />
-      <div style={S.card}>
-        <div style={{ textAlign:'center', marginBottom:'48px' }}>
-          <div style={{ fontSize:'4rem', marginBottom:'16px' }}>🧠</div>
-          <h1 style={S.title}>LearnAI</h1>
-          <p style={S.subtitle}>Your AI-powered personalized learning companion</p>
-          <div style={{ display:'flex', gap:'12px', justifyContent:'center', flexWrap:'wrap' }}>
-            {['🚀 AI-Generated Tutorials','📊 Progress Tracking','🏆 Skill Assessment','🌐 Internet-Sourced'].map(f => (
-              <span key={f} style={{ ...S.tag, background:'rgba(99,102,241,0.1)', color:'#818cf8', border:'1px solid rgba(99,102,241,0.3)' }}>{f}</span>
-            ))}
-          </div>
+    <div className="page" style={{ justifyContent: 'flex-start', paddingTop: 32 }}>
+      <div className="orb" style={{ width: 400, height: 400, background: 'rgba(99,102,241,0.05)', left: '5%', top: '5%' }} />
+      <div className="card card-wide z1">
+        <button className="btn-sm mb20" onClick={onBack}>← Start Over</button>
+        <h2 style={{ fontSize: '1.6rem', fontWeight: 800, marginBottom: 6 }}>🎯 Resources for "{data.topic}"</h2>
+        <p style={{ color: '#94a3b8', marginBottom: 20 }}>
+          Found <strong style={{ color: '#818cf8' }}>{videos.length} YouTube videos</strong> and{' '}
+          <strong style={{ color: '#22c55e' }}>{courses.length} free courses</strong> — select which to include in your path.
+        </p>
+
+        {/* Tabs */}
+        <div className="section-tabs">
+          <button className={`tab-btn ${tab === 'videos' ? 'active' : ''}`} onClick={() => setTab('videos')}>
+            ▶ YouTube Videos ({videos.length})
+            {selVideos.length > 0 && <span style={{ marginLeft: 6, background: 'rgba(255,0,0,0.2)', color: '#ff8888', borderRadius: 6, padding: '1px 6px', fontSize: '0.75rem' }}>{selVideos.length} selected</span>}
+          </button>
+          <button className={`tab-btn ${tab === 'courses' ? 'active' : ''}`} onClick={() => setTab('courses')}>
+            📚 Free Courses ({courses.length})
+            {selCourses.length > 0 && <span style={{ marginLeft: 6, background: 'rgba(34,197,94,0.15)', color: '#22c55e', borderRadius: 6, padding: '1px 6px', fontSize: '0.75rem' }}>{selCourses.length} selected</span>}
+          </button>
         </div>
 
-        <div style={{ marginBottom:'20px' }}>
-          <label style={S.label}>What do you want to learn today?</label>
-          <div style={{ display:'flex', gap:'12px' }}>
-            <input
-              style={S.input}
-              placeholder="e.g. Machine Learning, React hooks, Spanish cooking, Quantum Physics..."
-              value={topic}
-              onChange={e => setTopic(e.target.value)}
-              onKeyDown={e => e.key==='Enter' && handleSubmit()}
-            />
-            <button style={{ ...S.btn, whiteSpace:'nowrap', opacity: loading?0.7:1 }} onClick={handleSubmit} disabled={loading}>
-              {loading ? '⏳ Fetching...' : '✨ Explore'}
-            </button>
-          </div>
-          {err && <p style={{ color:'#ef4444', marginTop:'8px', fontSize:'0.9rem' }}>{err}</p>}
-        </div>
+        {tab === 'videos' && (
+          <>
+            <div className="flex justify-between flex-center mb12">
+              <label className="lbl" style={{ marginBottom: 0 }}>YouTube Tutorials</label>
+              <div className="flex gap8">
+                <button className="btn-sm" onClick={() => setSelVideos(videos.map((_, i) => i))}>All</button>
+                <button className="btn-sm" onClick={() => setSelVideos([])}>None</button>
+              </div>
+            </div>
+            {videos.length === 0 ? (
+              <div style={{ color: '#64748b', padding: '24px 0', textAlign: 'center' }}>
+                No YouTube videos found. Try a different topic or check your connection.
+              </div>
+            ) : (
+              <div className="grid-resources mb16">
+                {videos.map((v, i) => {
+                  const sel = selVideos.includes(i);
+                  return (
+                    <div key={i} className={`resource-card ${sel ? 'sel' : ''}`} onClick={() => toggleVideo(i)}>
+                      {v.thumbnail
+                        ? <img className="video-thumb" src={v.thumbnail} alt={v.title} onError={e => { e.target.style.display='none'; }} />
+                        : <div className="video-thumb-placeholder">▶</div>
+                      }
+                      <div className="card-body">
+                        <div className="card-title">{v.title}</div>
+                        {v.description && <div className="card-desc">{v.description}</div>}
+                      </div>
+                      <div className="card-footer">
+                        <span className="platform-badge" style={{ background: 'rgba(255,0,0,0.12)', color: '#ff4444', border: '1px solid rgba(255,0,0,0.2)' }}>▶ YouTube</span>
+                        <div className={`check-circle ${sel ? 'on-blue' : ''}`}>{sel ? '✓' : ''}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
 
-        <div>
-          <label style={S.label}>Popular topics to get started</label>
-          <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
-            {['Python Programming','Machine Learning','Web Development','Data Science','JavaScript','Blockchain','Photography','Chess Strategy'].map(t => (
-              <button key={t} style={S.btnSm} onClick={() => setTopic(t)}>{t}</button>
-            ))}
+        {tab === 'courses' && (
+          <>
+            <div className="flex justify-between flex-center mb12">
+              <label className="lbl" style={{ marginBottom: 0 }}>Free Courses & Tutorials</label>
+              <div className="flex gap8">
+                <button className="btn-sm" onClick={() => setSelCourses(courses.map((_, i) => i))}>All</button>
+                <button className="btn-sm" onClick={() => setSelCourses([])}>None</button>
+              </div>
+            </div>
+            {courses.length === 0 ? (
+              <div style={{ color: '#64748b', padding: '24px 0', textAlign: 'center' }}>
+                No free courses found. Try a different topic or check your connection.
+              </div>
+            ) : (
+              <div className="grid-resources mb16">
+                {courses.map((c, i) => {
+                  const sel = selCourses.includes(i);
+                  const ps = getPlatformStyle(c.platform);
+                  return (
+                    <div key={i} className={`resource-card ${sel ? 'sel-course' : ''}`} onClick={() => toggleCourse(i)}>
+                      <div style={{ padding: '16px 14px 8px', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 64, background: ps.bg }}>
+                        <span style={{ fontSize: '1.1rem', fontWeight: 800, color: ps.color }}>{c.platform}</span>
+                      </div>
+                      <div className="card-body">
+                        <div className="card-title">{c.title}</div>
+                        {c.description && <div className="card-desc">{c.description}</div>}
+                      </div>
+                      <div className="card-footer">
+                        <span className="platform-badge" style={{ background: ps.bg, color: ps.color, border: `1px solid ${ps.border}` }}>{c.platform}</span>
+                        <div className={`check-circle ${sel ? 'on-green' : ''}`}>{sel ? '✓' : ''}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Duration + Generate */}
+        <div style={{ padding: 20, background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 14, marginTop: 8 }}>
+          <label className="lbl">Session Duration: {dur} minutes</label>
+          <input type="range" min={15} max={180} step={15} value={dur} onChange={e => setDur(+e.target.value)}
+            style={{ width: '100%', accentColor: '#6366f1', marginBottom: 4 }} />
+          <div className="flex justify-between mb16" style={{ color: '#64748b', fontSize: '0.72rem' }}>
+            <span>15 min</span><span>3 hours</span>
           </div>
+
+          {err && <div className="err mb12">{err}</div>}
+
+          <button className="btn" style={{ width: '100%', fontSize: '1rem', padding: '15px' }}
+            disabled={selCount === 0} onClick={go}>
+            🤖 Generate AI Learning Path ({selCount} resource{selCount !== 1 ? 's' : ''} · {dur} min)
+          </button>
+          {selCount === 0 && <p style={{ color: '#64748b', textAlign: 'center', marginTop: 8, fontSize: '0.82rem' }}>Select at least one resource above</p>}
         </div>
       </div>
     </div>
   );
 }
 
-// ─── Step 2: Topic Suggestions ────────────────────────────────────────────────
-function TopicSuggestionsStep({ data, onSelect }) {
-  const [selected, setSelected] = useState([]);
-  const [duration, setDuration] = useState(30);
+// ── Step 3: Learning Path ──────────────────────────────────────────────────────
+function LearningPathStep({ pathData, topic, onQuiz, onBack }) {
+  const phases = pathData.phases || [];
+  const quiz = pathData.quiz || [];
 
-  const toggle = (id) => setSelected(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id]);
-  const selectAll = () => setSelected(data.subtopics.map(s=>s.id));
+  function ResourceCard({ res }) {
+    const isVideo = res.type === 'video' || res.platform === 'YouTube';
+    const ps = getPlatformStyle(res.platform);
+    const vidId = isVideo ? (() => {
+      const m = (res.url || '').match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+      return m ? m[1] : null;
+    })() : null;
+    const thumb = vidId ? `https://img.youtube.com/vi/${vidId}/mqdefault.jpg` : null;
+
+    return (
+      <div className="resource-row">
+        {isVideo && thumb
+          ? <img className="resource-thumb" src={thumb} alt="" onError={e => { e.target.style.display='none'; }} />
+          : <div className="resource-thumb-placeholder" style={{ background: ps.bg }}>
+              {isVideo ? '▶' : '📖'}
+            </div>
+        }
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#e2e8f0', marginBottom: 3, lineHeight: 1.4 }}>{res.title}</div>
+          {res.why && <div style={{ color: '#64748b', fontSize: '0.78rem', marginBottom: 5, fontStyle: 'italic' }}>{res.why}</div>}
+          <div className="flex gap8 flex-center">
+            <span className="platform-badge" style={{ background: ps.bg, color: ps.color, border: `1px solid ${ps.border}`, fontSize: '0.7rem', padding: '2px 7px', borderRadius: 5 }}>{res.platform}</span>
+            {res.estimated_minutes && <span style={{ color: '#64748b', fontSize: '0.75rem' }}>⏱ ~{res.estimated_minutes} min</span>}
+            <a href={res.url} target="_blank" rel="noopener noreferrer"
+              style={{ marginLeft: 'auto', color: '#818cf8', fontSize: '0.78rem', textDecoration: 'none', background: 'rgba(99,102,241,0.1)', padding: '4px 10px', borderRadius: 6, border: '1px solid rgba(99,102,241,0.25)', whiteSpace: 'nowrap' }}
+              onClick={e => e.stopPropagation()}>
+              {isVideo ? '▶ Watch' : '→ Open'} ↗
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div style={{ ...S.page, justifyContent:'flex-start', paddingTop:'40px' }}>
-      <BgParticles />
-      <div style={{ ...S.card, maxWidth:'900px' }}>
-        <div style={{ marginBottom:'32px' }}>
-          <button style={{ ...S.btnSm, marginBottom:'20px' }} onClick={() => window.location.reload()}>← Start Over</button>
-          <h2 style={{ fontSize:'1.8rem', fontWeight:800, color:'#e2e8f0', marginBottom:'8px' }}>📚 {data.main_topic}</h2>
-          <p style={{ color:'#94a3b8', lineHeight:1.7, marginBottom:'16px' }}>{data.description}</p>
-          <div style={{ display:'flex', gap:'16px', flexWrap:'wrap' }}>
-            <span style={{ ...S.tag, background:'rgba(34,197,94,0.15)', color:'#22c55e', border:'1px solid rgba(34,197,94,0.3)' }}>
-              ⏱ ~{data.total_estimated_hours}h total
-            </span>
-            <span style={{ ...S.tag, background:'rgba(99,102,241,0.15)', color:'#818cf8', border:'1px solid rgba(99,102,241,0.3)' }}>
-              📖 {data.subtopics?.length} subtopics
-            </span>
-          </div>
-        </div>
-
-        <div style={S.section}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'12px' }}>
-            <label style={S.label}>Select subtopics to learn</label>
-            <button style={S.btnSm} onClick={selectAll}>Select All</button>
-          </div>
-          <div style={{ display:'grid', gap:'10px', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))' }}>
-            {data.subtopics?.map(st => {
-              const isSelected = selected.includes(st.id);
-              return (
-                <div key={st.id}
-                  style={{ ...S.chip, background: isSelected?'rgba(99,102,241,0.25)':'rgba(99,102,241,0.08)', borderColor: isSelected?'#6366f1':'rgba(99,102,241,0.2)', transform: isSelected?'scale(1.02)':'scale(1)' }}
-                  onClick={() => toggle(st.id)}>
-                  <div style={{ width:'20px', height:'20px', borderRadius:'5px', border:`2px solid ${isSelected?'#6366f1':'#4b5563'}`, background: isSelected?'#6366f1':'transparent', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, transition:'all .2s' }}>
-                    {isSelected && <span style={{ color:'#fff', fontSize:'12px' }}>✓</span>}
-                  </div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ color:'#e2e8f0', fontWeight:500, fontSize:'0.9rem' }}>{st.name}</div>
-                    <div style={{ display:'flex', gap:'8px', marginTop:'4px' }}>
-                      <span style={{ color: diffColor[st.difficulty]||'#94a3b8', fontSize:'0.75rem' }}>● {st.difficulty}</span>
-                      <span style={{ color:'#64748b', fontSize:'0.75rem' }}>⏱ {st.estimated_minutes}min</span>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        <div style={{ ...S.section, display:'flex', gap:'24px', alignItems:'center', flexWrap:'wrap' }}>
-          <div style={{ flex:1, minWidth:'200px' }}>
-            <label style={S.label}>Session Duration (minutes): {duration}</label>
-            <input type="range" min={15} max={180} step={15} value={duration} onChange={e=>setDuration(+e.target.value)}
-              style={{ width:'100%', accentColor:'#6366f1' }} />
-            <div style={{ display:'flex', justifyContent:'space-between', color:'#64748b', fontSize:'0.75rem', marginTop:'4px' }}>
-              <span>15min</span><span>3hr</span>
+    <div style={{ minHeight: '100vh', background: '#080810' }}>
+      <div className="sticky-header">
+        <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <button className="btn-sm" onClick={onBack}>← Home</button>
+          <div style={{ flex: 1, minWidth: 100 }}>
+            <div style={{ fontWeight: 700, color: '#e2e8f0', fontSize: '0.95rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {pathData.title || `Learning Path: ${topic}`}
             </div>
+            <div style={{ color: '#64748b', fontSize: '0.75rem' }}>{phases.length} phases · {quiz.length} quiz questions</div>
           </div>
+          {quiz.length > 0 && (
+            <button className="btn" style={{ padding: '10px 18px', fontSize: '0.9rem' }} onClick={onQuiz}>Take Quiz 📝</button>
+          )}
         </div>
+      </div>
 
-        {data.related_topics?.length > 0 && (
-          <div style={{ ...S.section, padding:'16px', background:'rgba(56,189,248,0.08)', borderRadius:'12px', border:'1px solid rgba(56,189,248,0.2)' }}>
-            <label style={{ ...S.label, color:'#38bdf8' }}>🔗 Related topics you might explore next</label>
-            <div style={{ display:'flex', gap:'8px', flexWrap:'wrap' }}>
-              {data.related_topics.map(t => <span key={t} style={{ ...S.tag, background:'rgba(56,189,248,0.1)', color:'#38bdf8', border:'1px solid rgba(56,189,248,0.2)' }}>{t}</span>)}
+      <div style={{ maxWidth: 900, margin: '0 auto', padding: '28px 24px' }}>
+        {/* Overview */}
+        {pathData.overview && (
+          <div style={{ background: 'rgba(99,102,241,0.07)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 14, padding: '18px 22px', marginBottom: 28 }}>
+            <div style={{ color: '#818cf8', fontWeight: 700, marginBottom: 8 }}>📋 Overview</div>
+            <p style={{ color: '#cbd5e1', lineHeight: 1.75, fontSize: '0.95rem' }}>{pathData.overview}</p>
+          </div>
+        )}
+
+        {/* Phases */}
+        {phases.map((phase, pi) => (
+          <div key={phase.id || pi} className="phase-card">
+            <div className="flex gap12 flex-center mb12">
+              <div className="phase-num">{pi + 1}</div>
+              <div>
+                <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#e2e8f0' }}>{phase.name}</div>
+                {phase.description && <div style={{ color: '#94a3b8', fontSize: '0.83rem', marginTop: 2 }}>{phase.description}</div>}
+              </div>
+            </div>
+            {(phase.resources || []).map((res, ri) => (
+              <ResourceCard key={ri} res={res} />
+            ))}
+          </div>
+        ))}
+
+        {/* Key Skills */}
+        {(pathData.key_skills || []).length > 0 && (
+          <div style={{ background: 'rgba(56,189,248,0.05)', border: '1px solid rgba(56,189,248,0.15)', borderRadius: 14, padding: '16px 20px', marginBottom: 16 }}>
+            <div style={{ color: '#38bdf8', fontWeight: 700, marginBottom: 10, fontSize: '0.88rem' }}>🎯 Skills You'll Gain</div>
+            <div className="skills-row">
+              {pathData.key_skills.map((s, i) => <span key={i} className="skill-chip">{s}</span>)}
             </div>
           </div>
         )}
 
-        <button
-          style={{ ...S.btn, width:'100%', fontSize:'1.1rem', padding:'18px', opacity: selected.length===0?0.5:1, marginTop:'8px' }}
-          disabled={selected.length===0}
-          onClick={() => onSelect({ topic: data.main_topic, subtopics: data.subtopics.filter(s=>selected.includes(s.id)).map(s=>s.name), duration })}>
-          🚀 Generate My Personalized Tutorial ({selected.length} topics, {duration}min)
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── Step 3: Tutorial Viewer ──────────────────────────────────────────────────
-function TutorialStep({ tutorial, topic, onQuiz }) {
-  const [activeSection, setActiveSection] = useState(0);
-  const [completed, setCompleted] = useState(new Set());
-  const sections = tutorial.sections || [];
-
-  const markDone = (i) => setCompleted(prev => new Set([...prev, i]));
-  const pct = sections.length ? Math.round(completed.size / sections.length * 100) : 0;
-
-  return (
-    <div style={{ minHeight:'100vh', display:'flex', flexDirection:'column', position:'relative' }}>
-      <BgParticles />
-
-      {/* Header */}
-      <div style={{ position:'sticky', top:0, zIndex:10, background:'rgba(10,10,15,0.95)', backdropFilter:'blur(20px)', borderBottom:'1px solid rgba(99,102,241,0.2)', padding:'12px 24px' }}>
-        <div style={{ maxWidth:'1100px', margin:'0 auto', display:'flex', alignItems:'center', gap:'16px', flexWrap:'wrap' }}>
-          <button style={S.btnSm} onClick={() => window.location.reload()}>← Home</button>
-          <div style={{ flex:1, minWidth:'200px' }}>
-            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
-              <span style={{ color:'#e2e8f0', fontWeight:600 }}>{tutorial.title}</span>
-              <span style={{ color:'#6366f1', fontWeight:700 }}>{pct}%</span>
+        {/* Next Steps */}
+        {(pathData.next_steps || []).length > 0 && (
+          <div style={{ background: 'rgba(139,92,246,0.05)', border: '1px solid rgba(139,92,246,0.15)', borderRadius: 14, padding: '16px 20px', marginBottom: 28 }}>
+            <div style={{ color: '#a78bfa', fontWeight: 700, marginBottom: 10, fontSize: '0.88rem' }}>🚀 What to Learn Next</div>
+            <div className="skills-row">
+              {pathData.next_steps.map((s, i) => <span key={i} className="next-chip">{s}</span>)}
             </div>
-            <div style={S.progress}><div style={{ height:'100%', width:pct+'%', background:'linear-gradient(90deg,#6366f1,#8b5cf6)', transition:'width .5s', borderRadius:'3px' }}/></div>
           </div>
-          <button style={{ ...S.btn, padding:'10px 20px' }} onClick={onQuiz}>Take Quiz 📝</button>
-        </div>
-      </div>
+        )}
 
-      <div style={{ display:'flex', flex:1, maxWidth:'1100px', margin:'0 auto', width:'100%', padding:'24px', gap:'24px', position:'relative', zIndex:1 }}>
-        {/* Sidebar */}
-        <div style={{ width:'260px', flexShrink:0, display:'flex', flexDirection:'column', gap:'6px', position:'sticky', top:'80px', alignSelf:'flex-start', maxHeight:'calc(100vh - 100px)', overflowY:'auto' }}>
-          <div style={{ color:'#94a3b8', fontSize:'0.75rem', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.1em', padding:'0 8px 8px' }}>Sections</div>
-          {sections.map((sec, i) => (
-            <button key={i} onClick={() => setActiveSection(i)} style={{
-              background: activeSection===i ? 'rgba(99,102,241,0.25)' : 'transparent',
-              border: activeSection===i ? '1px solid rgba(99,102,241,0.5)' : '1px solid transparent',
-              borderRadius:'8px', padding:'10px 12px', textAlign:'left', cursor:'pointer',
-              color: completed.has(i) ? '#22c55e' : activeSection===i ? '#e2e8f0' : '#94a3b8',
-              fontSize:'0.85rem', fontWeight: activeSection===i ? 600 : 400, transition:'all .2s'
-            }}>
-              {completed.has(i) ? '✓ ' : `${i+1}. `}{sec.title}
-            </button>
-          ))}
-        </div>
-
-        {/* Content */}
-        <div style={{ flex:1, minWidth:0 }}>
-          {sections[activeSection] && (
-            <div style={{ ...S.card, padding:'32px' }}>
-              <h2 style={{ fontSize:'1.8rem', fontWeight:800, color:'#e2e8f0', marginBottom:'8px' }}>
-                {sections[activeSection].title}
-              </h2>
-              <div style={{ display:'flex', gap:'12px', marginBottom:'24px' }}>
-                <span style={{ color:'#64748b', fontSize:'0.85rem' }}>⏱ ~{sections[activeSection].estimated_minutes} min</span>
-                {sections[activeSection].has_code && <span style={{ color:'#38bdf8', fontSize:'0.85rem' }}>{'</>'} Code included</span>}
-              </div>
-
-              {sections[activeSection].key_points?.length > 0 && (
-                <div style={{ background:'rgba(99,102,241,0.1)', border:'1px solid rgba(99,102,241,0.3)', borderRadius:'12px', padding:'16px', marginBottom:'24px' }}>
-                  <div style={{ color:'#818cf8', fontWeight:700, marginBottom:'8px' }}>🎯 Key Points</div>
-                  {sections[activeSection].key_points.map((kp, i) => (
-                    <div key={i} style={{ color:'#cbd5e1', fontSize:'0.9rem', padding:'4px 0', paddingLeft:'16px', borderLeft:'2px solid #6366f1', marginBottom:'4px' }}>
-                      {kp}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div style={{ color:'#cbd5e1', lineHeight:1.8 }} className="prose">
-                <ReactMarkdown
-                  components={{
-                    code({ node, inline, className, children, ...props }) {
-                      const match = /language-(\w+)/.exec(className||'');
-                      return !inline && match ? (
-                        <SyntaxHighlighter style={oneDark} language={match[1]} PreTag="div" {...props}>
-                          {String(children).replace(/\n$/, '')}
-                        </SyntaxHighlighter>
-                      ) : (
-                        <code style={{ background:'rgba(99,102,241,0.2)', padding:'2px 6px', borderRadius:'4px', fontFamily:'JetBrains Mono,monospace', fontSize:'0.9em' }} {...props}>{children}</code>
-                      );
-                    },
-                    h1: ({children}) => <h1 style={{fontSize:'1.5rem',fontWeight:700,color:'#e2e8f0',margin:'24px 0 12px'}}>{children}</h1>,
-                    h2: ({children}) => <h2 style={{fontSize:'1.3rem',fontWeight:700,color:'#e2e8f0',margin:'20px 0 10px'}}>{children}</h2>,
-                    h3: ({children}) => <h3 style={{fontSize:'1.1rem',fontWeight:600,color:'#c4b5fd',margin:'16px 0 8px'}}>{children}</h3>,
-                    p: ({children}) => <p style={{marginBottom:'16px',color:'#cbd5e1'}}>{children}</p>,
-                    ul: ({children}) => <ul style={{paddingLeft:'24px',marginBottom:'16px',color:'#cbd5e1'}}>{children}</ul>,
-                    ol: ({children}) => <ol style={{paddingLeft:'24px',marginBottom:'16px',color:'#cbd5e1'}}>{children}</ol>,
-                    li: ({children}) => <li style={{marginBottom:'6px'}}>{children}</li>,
-                    strong: ({children}) => <strong style={{color:'#e2e8f0',fontWeight:600}}>{children}</strong>,
-                    blockquote: ({children}) => <blockquote style={{borderLeft:'4px solid #6366f1',paddingLeft:'16px',margin:'16px 0',color:'#94a3b8',fontStyle:'italic'}}>{children}</blockquote>,
-                  }}
-                >
-                  {sections[activeSection].content}
-                </ReactMarkdown>
-              </div>
-
-              <div style={{ display:'flex', justifyContent:'space-between', marginTop:'32px', gap:'12px' }}>
-                <button style={{ ...S.btnSm, opacity: activeSection===0?0.4:1 }} disabled={activeSection===0} onClick={() => setActiveSection(i=>i-1)}>← Previous</button>
-                <div style={{ display:'flex', gap:'12px' }}>
-                  {!completed.has(activeSection) && (
-                    <button style={{ ...S.btnSm, background:'rgba(34,197,94,0.15)', borderColor:'rgba(34,197,94,0.4)', color:'#22c55e' }} onClick={() => markDone(activeSection)}>
-                      ✓ Mark Complete
-                    </button>
-                  )}
-                  {activeSection < sections.length - 1 && (
-                    <button style={S.btn} onClick={() => { markDone(activeSection); setActiveSection(i=>i+1); }}>
-                      Next →
-                    </button>
-                  )}
-                  {activeSection === sections.length - 1 && (
-                    <button style={S.btn} onClick={onQuiz}>Take the Quiz! 🎯</button>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        {quiz.length > 0 && (
+          <button className="btn" style={{ width: '100%', fontSize: '1.05rem', padding: '16px' }} onClick={onQuiz}>
+            🎯 Take the Knowledge Quiz ({quiz.length} questions)
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-// ─── Step 4: Quiz ─────────────────────────────────────────────────────────────
+// ── Step 4: Quiz ───────────────────────────────────────────────────────────────
 function QuizStep({ quiz, topic, onResult }) {
-  const [current, setCurrent] = useState(0);
-  const [selected, setSelected] = useState(null);
+  const [cur, setCur] = useState(0);
+  const [sel, setSel] = useState(null);
   const [answers, setAnswers] = useState([]);
   const [confirmed, setConfirmed] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  const q = quiz[current];
-  const pct = Math.round((current / quiz.length) * 100);
+  const letters = ['A', 'B', 'C', 'D'];
+  const q = quiz[cur];
+  const pct = Math.round(cur / quiz.length * 100);
 
   const confirm = () => {
-    if (selected === null) return;
+    if (sel === null) return;
     setConfirmed(true);
-    setAnswers(prev => [...prev, { question: q.question, chosen: selected, correct: q.correct, is_correct: selected === q.correct }]);
+    setAnswers(prev => [...prev, { is_correct: sel === q.correct }]);
   };
 
-  const next = async () => {
-    setConfirmed(false); setSelected(null);
-    if (current < quiz.length - 1) { setCurrent(i => i+1); return; }
-    setLoading(true);
-    try {
-      const res = await axios.post(`${API}/api/submit-quiz`, { topic, answers: [...answers], user_id: uid() });
-      onResult(res.data);
-    } catch { onResult({ score: answers.filter(a=>a.is_correct).length/answers.length*100, correct: answers.filter(a=>a.is_correct).length, total: answers.length, proficiency:'Unknown', percentile:50, stats:{median:50,q1:25,q3:75,total_participants:1} }); }
-    setLoading(false);
+  const next = () => {
+    if (cur < quiz.length - 1) { setConfirmed(false); setSel(null); setCur(i => i + 1); return; }
+    const all = [...answers];
+    const correct = all.filter(a => a.is_correct).length;
+    const total = all.length;
+    const score = Math.round(correct / total * 100);
+    saveScore(topic, score);
+    const scores = getScores(topic);
+    const n = scores.length;
+    const median = n > 0 ? scores[Math.floor(n / 2)] : score;
+    const q1val = n > 0 ? scores[Math.floor(n / 4)] : Math.max(0, score - 15);
+    const q3val = n > 0 ? scores[Math.floor(3 * n / 4)] : Math.min(100, score + 10);
+    const percentile = n > 1 ? Math.round(scores.filter(s => s < score).length / n * 100) : 50;
+    const proficiency = score >= 90 ? 'Expert' : score >= 75 ? 'Advanced' : score >= 60 ? 'Intermediate' : score >= 40 ? 'Developing' : 'Beginner';
+    onResult({ score, correct, total, proficiency, percentile, stats: { median, q1: q1val, q3: q3val, n } });
   };
-
-  const letters = ['A','B','C','D'];
 
   return (
-    <div style={S.page}>
-      <BgParticles />
-      <div style={S.card}>
-        <div style={{ marginBottom:'24px' }}>
-          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'8px' }}>
-            <span style={{ color:'#94a3b8' }}>Question {current+1} of {quiz.length}</span>
-            <span style={{ color:'#6366f1', fontWeight:700 }}>{pct}%</span>
+    <div className="page">
+      <div className="card z1">
+        <div className="mb24">
+          <div className="flex justify-between mb8" style={{ fontSize: '0.85rem' }}>
+            <span style={{ color: '#94a3b8' }}>Question {cur + 1} of {quiz.length}</span>
+            <span style={{ color: '#6366f1', fontWeight: 700 }}>{pct}%</span>
           </div>
-          <div style={S.progress}><div style={{ height:'100%', width:pct+'%', background:'linear-gradient(90deg,#6366f1,#8b5cf6)', transition:'width .5s', borderRadius:'3px' }}/></div>
+          <div className="progress-bar"><div className="progress-fill" style={{ width: pct + '%' }} /></div>
         </div>
 
-        <h2 style={{ fontSize:'1.4rem', fontWeight:700, color:'#e2e8f0', marginBottom:'28px', lineHeight:1.5 }}>
-          {current+1}. {q.question}
+        <h2 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#e2e8f0', marginBottom: 22, lineHeight: 1.55 }}>
+          {cur + 1}. {q.question}
         </h2>
 
-        <div style={{ display:'flex', flexDirection:'column', gap:'12px', marginBottom:'24px' }}>
-          {q.options.map((opt, i) => {
-            let bg='rgba(99,102,241,0.08)', border='rgba(99,102,241,0.2)', color='#cbd5e1';
-            if (confirmed) {
-              if (i === q.correct) { bg='rgba(34,197,94,0.15)'; border='rgba(34,197,94,0.5)'; color='#22c55e'; }
-              else if (i === selected && i !== q.correct) { bg='rgba(239,68,68,0.15)'; border='rgba(239,68,68,0.5)'; color='#ef4444'; }
-            } else if (selected === i) { bg='rgba(99,102,241,0.25)'; border='#6366f1'; color='#e2e8f0'; }
-            return (
-              <div key={i} onClick={() => !confirmed && setSelected(i)}
-                style={{ ...S.chip, background:bg, borderColor:border, color, cursor:confirmed?'default':'pointer', transform:selected===i&&!confirmed?'scale(1.01)':'scale(1)' }}>
-                <span style={{ width:'28px', height:'28px', borderRadius:'6px', background:'rgba(99,102,241,0.2)', display:'flex', alignItems:'center', justifyContent:'center', fontWeight:700, fontSize:'0.85rem', flexShrink:0 }}>{letters[i]}</span>
-                <span style={{ fontSize:'0.95rem' }}>{opt}</span>
-              </div>
-            );
-          })}
-        </div>
+        {(q.options || []).map((opt, i) => {
+          let cls = 'opt';
+          if (confirmed) {
+            if (i === q.correct) cls += ' correct';
+            else if (i === sel) cls += ' wrong';
+          } else if (sel === i) cls += ' picked';
+          return (
+            <div key={i} className={cls} onClick={() => !confirmed && setSel(i)}
+              style={{ cursor: confirmed ? 'default' : 'pointer', color: confirmed && i === q.correct ? '#22c55e' : confirmed && i === sel ? '#ef4444' : '#cbd5e1' }}>
+              <span className="letter">{letters[i]}</span>
+              <span style={{ fontSize: '0.92rem' }}>{opt}</span>
+            </div>
+          );
+        })}
 
-        {confirmed && (
-          <div style={{ background:'rgba(99,102,241,0.1)', border:'1px solid rgba(99,102,241,0.3)', borderRadius:'12px', padding:'16px', marginBottom:'20px' }}>
-            <div style={{ color:'#818cf8', fontWeight:700, marginBottom:'4px' }}>💡 Explanation</div>
-            <div style={{ color:'#cbd5e1', fontSize:'0.9rem', lineHeight:1.6 }}>{q.explanation}</div>
+        {confirmed && q.explanation && (
+          <div className="expl">
+            <div style={{ color: '#818cf8', fontWeight: 700, marginBottom: 5, fontSize: '0.85rem' }}>💡 Explanation</div>
+            <div style={{ color: '#cbd5e1', fontSize: '0.88rem', lineHeight: 1.6 }}>{q.explanation}</div>
           </div>
         )}
 
-        <div style={{ display:'flex', justifyContent:'flex-end', gap:'12px' }}>
-          {!confirmed ? (
-            <button style={{ ...S.btn, opacity:selected===null?0.4:1 }} disabled={selected===null} onClick={confirm}>Confirm Answer</button>
-          ) : (
-            <button style={S.btn} onClick={next} disabled={loading}>
-              {loading ? 'Submitting...' : current < quiz.length - 1 ? 'Next Question →' : 'See Results 🏆'}
-            </button>
-          )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          {!confirmed
+            ? <button className="btn" disabled={sel === null} onClick={confirm}>Confirm Answer</button>
+            : <button className="btn" onClick={next}>{cur < quiz.length - 1 ? 'Next Question →' : 'See Results 🏆'}</button>
+          }
         </div>
       </div>
     </div>
   );
 }
 
-// ─── Step 5: Results ──────────────────────────────────────────────────────────
+// ── Mini bar chart ─────────────────────────────────────────────────────────────
+function BarChart({ data }) {
+  const max = Math.max(...data.map(d => d.value), 1);
+  return (
+    <div className="chart-bars">
+      {data.map((d, i) => (
+        <div key={i} className="chart-bar-wrap">
+          <div style={{ flex: 1, display: 'flex', alignItems: 'flex-end', width: '100%' }}>
+            <div className="chart-bar" style={{ background: d.color, height: Math.round((d.value / max) * 100) + '%', minHeight: 4 }} />
+          </div>
+          <div className="chart-value" style={{ color: d.color }}>{d.value}%</div>
+          <div className="chart-label">{d.label}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Step 5: Results ────────────────────────────────────────────────────────────
 function ResultStep({ result, topic, onRestart }) {
   const { score, correct, total, proficiency, percentile, stats } = result;
+  const pColors = { Expert: '#f59e0b', Advanced: '#22c55e', Intermediate: '#6366f1', Developing: '#38bdf8', Beginner: '#94a3b8' };
+  const pEmoji = { Expert: '🏆', Advanced: '⭐', Intermediate: '📈', Developing: '🌱', Beginner: '🎯' };
+  const color = pColors[proficiency] || '#6366f1';
+  const pDesc = {
+    Expert: "Outstanding! You've demonstrated mastery-level understanding.",
+    Advanced: "Excellent work! You have a strong grasp of this topic.",
+    Intermediate: "Good progress! Keep practising to advance further.",
+    Developing: "You're building a foundation! Review the resources and retake the quiz.",
+    Beginner: "Everyone starts somewhere! Work through the learning path before retaking.",
+  };
 
-  const profColors = { Expert:'#f59e0b', Advanced:'#22c55e', Intermediate:'#6366f1', Developing:'#38bdf8', Beginner:'#94a3b8' };
-  const profEmoji = { Expert:'🏆', Advanced:'⭐', Intermediate:'📈', Developing:'🌱', Beginner:'🎯' };
-  const color = profColors[proficiency] || '#6366f1';
-
-  const chartData = [
-    { name:'Q1 (25th)', value: stats.q1, fill:'#38bdf8' },
-    { name:'Median (50th)', value: stats.median, fill:'#818cf8' },
-    { name:'Q3 (75th)', value: stats.q3, fill:'#c084fc' },
-    { name:'Your Score', value: score, fill: color },
-  ];
-
-  const radarData = [
-    { subject:'Score', A: score },
-    { subject:'vs Median', A: Math.min(100, (score / (stats.median||1)) * 60) },
-    { subject:'Percentile', A: percentile },
-    { subject:'Correct', A: (correct/total)*100 },
-    { subject:'Completion', A: 100 },
+  const barData = [
+    { label: 'Q1 (25th)', value: Math.round(stats.q1), color: '#38bdf8' },
+    { label: 'Median', value: Math.round(stats.median), color: '#818cf8' },
+    { label: 'Q3 (75th)', value: Math.round(stats.q3), color: '#c084fc' },
+    { label: 'You', value: Math.round(score), color },
   ];
 
   return (
-    <div style={S.page}>
-      <BgParticles />
-      <div style={{ ...S.card, maxWidth:'920px' }}>
-        <div style={{ textAlign:'center', marginBottom:'40px' }}>
-          <div style={{ fontSize:'5rem', marginBottom:'16px' }}>{profEmoji[proficiency]||'🎯'}</div>
-          <h1 style={{ fontSize:'2.5rem', fontWeight:800, color:'#e2e8f0', marginBottom:'8px' }}>Learning Complete!</h1>
-          <p style={{ color:'#94a3b8', fontSize:'1.1rem' }}>Here's your performance analysis for <strong style={{ color:'#818cf8' }}>{topic}</strong></p>
+    <div className="page" style={{ justifyContent: 'flex-start', paddingTop: 36 }}>
+      <div className="orb" style={{ width: 400, height: 400, background: 'rgba(99,102,241,0.06)', left: '10%', top: '5%' }} />
+      <div className="card card-wide z1">
+        <div style={{ textAlign: 'center', marginBottom: 32 }}>
+          <div style={{ fontSize: '4rem', marginBottom: 10 }}>{pEmoji[proficiency] || '🎯'}</div>
+          <h1 style={{ fontSize: '2rem', fontWeight: 800, color: '#e2e8f0', marginBottom: 6 }}>Quiz Complete!</h1>
+          <p style={{ color: '#94a3b8' }}>Performance for <strong style={{ color: '#818cf8' }}>{topic}</strong></p>
         </div>
 
-        {/* Score + Proficiency */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))', gap:'16px', marginBottom:'32px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 12, marginBottom: 24 }}>
           {[
-            { label:'Your Score', value:`${Math.round(score)}%`, sub:`${correct} / ${total} correct`, color:'#e2e8f0' },
-            { label:'Proficiency Level', value: profEmoji[proficiency]+' '+proficiency, sub:'Based on your performance', color },
-            { label:'Percentile Rank', value:`Top ${Math.round(100-percentile)}%`, sub:`Better than ${Math.round(percentile)}% of learners`, color:'#22c55e' },
-            { label:'Participants', value: stats.total_participants, sub:'Took similar quiz', color:'#38bdf8' },
-          ].map(stat => (
-            <div key={stat.label} style={{ background:'rgba(15,15,30,0.6)', border:`1px solid ${stat.color}40`, borderRadius:'16px', padding:'20px', textAlign:'center' }}>
-              <div style={{ color:'#64748b', fontSize:'0.8rem', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:'8px' }}>{stat.label}</div>
-              <div style={{ fontSize:'1.8rem', fontWeight:800, color:stat.color, marginBottom:'4px' }}>{stat.value}</div>
-              <div style={{ color:'#64748b', fontSize:'0.8rem' }}>{stat.sub}</div>
+            { label: 'Your Score', value: score + '%', sub: correct + ' / ' + total + ' correct', c: '#e2e8f0' },
+            { label: 'Proficiency', value: pEmoji[proficiency] + ' ' + proficiency, sub: 'Based on your performance', c: color },
+            { label: 'Percentile', value: 'Top ' + Math.round(100 - percentile) + '%', sub: 'Better than ' + Math.round(percentile) + '% of learners', c: '#22c55e' },
+            { label: 'Participants', value: stats.n, sub: 'Took similar quiz', c: '#38bdf8' },
+          ].map(s => (
+            <div key={s.label} className="stat-card" style={{ border: '1px solid ' + s.c + '30' }}>
+              <div className="stat-lbl">{s.label}</div>
+              <div className="stat-val" style={{ color: s.c }}>{s.value}</div>
+              <div className="stat-sub">{s.sub}</div>
             </div>
           ))}
         </div>
 
-        {/* Charts */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'24px', marginBottom:'32px' }}>
-          <div style={{ background:'rgba(15,15,30,0.6)', border:'1px solid rgba(99,102,241,0.2)', borderRadius:'16px', padding:'20px' }}>
-            <div style={{ color:'#818cf8', fontWeight:700, marginBottom:'16px' }}>📊 Score Distribution</div>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={chartData} barSize={40}>
-                <XAxis dataKey="name" tick={{ fill:'#64748b', fontSize:11 }} axisLine={false} tickLine={false}/>
-                <YAxis domain={[0,100]} tick={{ fill:'#64748b', fontSize:11 }} axisLine={false} tickLine={false}/>
-                <Tooltip contentStyle={{ background:'#1a1a2e', border:'1px solid #6366f1', borderRadius:'8px', color:'#e2e8f0' }}/>
-                <Bar dataKey="value" radius={[6,6,0,0]}>
-                  {chartData.map((entry, i) => <Cell key={i} fill={entry.fill}/>)}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div style={{ background:'rgba(15,15,30,0.6)', border:'1px solid rgba(99,102,241,0.2)', borderRadius:'16px', padding:'20px' }}>
-            <div style={{ color:'#818cf8', fontWeight:700, marginBottom:'8px' }}>🕸 Performance Radar</div>
-            <ResponsiveContainer width="100%" height={200}>
-              <RadarChart data={radarData}>
-                <PolarGrid stroke="#1e293b"/>
-                <PolarAngleAxis dataKey="subject" tick={{ fill:'#64748b', fontSize:11 }}/>
-                <Radar name="You" dataKey="A" stroke="#6366f1" fill="#6366f1" fillOpacity={0.4}/>
-              </RadarChart>
-            </ResponsiveContainer>
-          </div>
+        <div style={{ background: 'rgba(10,10,20,0.7)', border: '1px solid rgba(99,102,241,0.18)', borderRadius: 12, padding: 18, marginBottom: 16 }}>
+          <div style={{ color: '#818cf8', fontWeight: 700, marginBottom: 14, fontSize: '0.9rem' }}>📊 Score vs. Peers</div>
+          <BarChart data={barData} />
         </div>
 
-        {/* Benchmark */}
-        <div style={{ background:'rgba(99,102,241,0.08)', border:'1px solid rgba(99,102,241,0.2)', borderRadius:'16px', padding:'24px', marginBottom:'28px' }}>
-          <div style={{ color:'#818cf8', fontWeight:700, marginBottom:'16px' }}>📈 Benchmark Comparison</div>
-          <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
-            {[
-              { label:'25th Percentile (Q1)', val:stats.q1, color:'#38bdf8' },
-              { label:'Median (50th)', val:stats.median, color:'#818cf8' },
-              { label:'75th Percentile (Q3)', val:stats.q3, color:'#c084fc' },
-              { label:'Your Score', val:score, color },
-            ].map(row => (
-              <div key={row.label}>
-                <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
-                  <span style={{ color:'#94a3b8', fontSize:'0.85rem' }}>{row.label}</span>
-                  <span style={{ color:row.color, fontWeight:700, fontSize:'0.9rem' }}>{Math.round(row.val)}%</span>
-                </div>
-                <div style={S.progress}><div style={{ height:'100%', width:row.val+'%', background:row.color, borderRadius:'3px', transition:'width 1s' }}/></div>
+        <div style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.18)', borderRadius: 12, padding: 18, marginBottom: 16 }}>
+          <div style={{ color: '#818cf8', fontWeight: 700, marginBottom: 14, fontSize: '0.9rem' }}>📈 Benchmark</div>
+          {[
+            { label: '25th Percentile (Q1)', val: stats.q1, c: '#38bdf8' },
+            { label: 'Median (50th)', val: stats.median, c: '#818cf8' },
+            { label: '75th Percentile (Q3)', val: stats.q3, c: '#c084fc' },
+            { label: 'Your Score', val: score, c: color },
+          ].map(row => (
+            <div key={row.label} style={{ marginBottom: 10 }}>
+              <div className="flex justify-between mb8" style={{ fontSize: '0.82rem' }}>
+                <span style={{ color: '#94a3b8' }}>{row.label}</span>
+                <span style={{ color: row.c, fontWeight: 700 }}>{Math.round(row.val)}%</span>
               </div>
-            ))}
-          </div>
-        </div>
-
-        {/* What it means */}
-        <div style={{ background:`${color}15`, border:`1px solid ${color}40`, borderRadius:'16px', padding:'20px', marginBottom:'28px' }}>
-          <div style={{ fontWeight:700, color, marginBottom:'8px' }}>What does "{proficiency}" mean?</div>
-          <div style={{ color:'#cbd5e1', fontSize:'0.95rem', lineHeight:1.7 }}>
-            {proficiency==='Expert' && "Outstanding! You've demonstrated mastery-level understanding. You're in the top tier of all learners on this topic. Consider exploring advanced applications or teaching others."}
-            {proficiency==='Advanced' && "Excellent work! You have a strong grasp of the topic with above-average performance. You're well-positioned to tackle real-world applications and more complex variations."}
-            {proficiency==='Intermediate' && "Good progress! You understand the core concepts well. Focus on reinforcing the areas where you hesitated and practice with more real-world examples to advance further."}
-            {proficiency==='Developing' && "You're building a foundation! Some key concepts need more practice. Review the sections where you found difficulty and retake the quiz after more study."}
-            {proficiency==='Beginner' && "Everyone starts somewhere! This topic has many nuances to explore. Take your time with the tutorial sections, and don't hesitate to revisit challenging parts."}
-          </div>
-        </div>
-
-        <div style={{ display:'flex', gap:'12px', justifyContent:'center', flexWrap:'wrap' }}>
-          <button style={{ ...S.btn, background:'linear-gradient(135deg,#22c55e,#16a34a)' }} onClick={onRestart}>🆕 Learn Another Topic</button>
-          <button style={S.btnSm} onClick={() => window.print()}>🖨 Save Report</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Loading Screen ───────────────────────────────────────────────────────────
-function LoadingScreen({ message }) {
-  return (
-    <div style={{ ...S.page, textAlign:'center' }}>
-      <BgParticles />
-      <div style={{ position:'relative', zIndex:1 }}>
-        <div style={{ fontSize:'4rem', marginBottom:'24px', animation:'spin 2s linear infinite', display:'inline-block' }}>⚡</div>
-        <h2 style={{ fontSize:'1.8rem', fontWeight:700, color:'#e2e8f0', marginBottom:'12px' }}>Generating with AI...</h2>
-        <p style={{ color:'#94a3b8', marginBottom:'32px' }}>{message}</p>
-        <div style={{ display:'flex', gap:'8px', justifyContent:'center' }}>
-          {[0,1,2].map(i => (
-            <div key={i} style={{ width:'10px', height:'10px', borderRadius:'50%', background:'#6366f1', animation:`pulse 1.2s ${i*0.3}s ease-in-out infinite` }}/>
+              <div className="progress-bar"><div className="bench-bar" style={{ background: row.c, width: row.val + '%' }} /></div>
+            </div>
           ))}
         </div>
+
+        <div style={{ background: color + '14', border: '1px solid ' + color + '30', borderRadius: 12, padding: 16, marginBottom: 22 }}>
+          <div style={{ fontWeight: 700, color, marginBottom: 6 }}>{pEmoji[proficiency]} {proficiency} Level</div>
+          <div style={{ color: '#cbd5e1', fontSize: '0.9rem', lineHeight: 1.7 }}>{pDesc[proficiency]}</div>
+        </div>
+
+        <div className="flex justify-center gap12 wrap">
+          <button className="btn btn-green" onClick={onRestart}>🆕 Learn Another Topic</button>
+          <button className="btn-sm" onClick={() => window.print()}>🖨 Save Report</button>
+        </div>
       </div>
-      <style>{`@keyframes pulse{0%,100%{transform:scale(1);opacity:.5}50%{transform:scale(1.4);opacity:1}} @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 }
 
-// ─── Main App ─────────────────────────────────────────────────────────────────
+// ── Main App ───────────────────────────────────────────────────────────────────
 export default function App() {
   const [step, setStep] = useState('landing');
-  const [suggestions, setSuggestions] = useState(null);
-  const [tutorial, setTutorial] = useState(null);
+  const [resources, setResources] = useState(null);   // { topic, videos, courses }
+  const [pathData, setPathData] = useState(null);     // Gemini learning path
   const [topic, setTopic] = useState('');
   const [result, setResult] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [loadingMsg, setLoadingMsg] = useState('');
 
-  const handleSuggestions = (data) => { setSuggestions(data); setStep('suggestions'); };
+  const reset = () => { setStep('landing'); setResources(null); setPathData(null); setTopic(''); setResult(null); };
 
-  const handleSelect = useCallback(async ({ topic: t, subtopics, duration }) => {
-    setTopic(t); setLoading(true); setLoadingMsg(`Creating your personalized ${t} tutorial with AI...`);
-    try {
-      const res = await axios.post(`${API}/api/generate-tutorial`, { topic: t, subtopics, duration });
-      setTutorial(res.data); setStep('tutorial');
-    } catch (e) {
-      alert('Failed to generate tutorial. Please try again.');
-    }
-    setLoading(false);
+  const handleSearchDone = useCallback((data) => {
+    setResources(data);
+    setTopic(data.topic);
+    setStep('resources');
   }, []);
 
-  const handleQuiz = () => setStep('quiz');
-  const handleResult = (r) => { setResult(r); setStep('result'); };
-  const handleRestart = () => { setStep('landing'); setSuggestions(null); setTutorial(null); setTopic(''); setResult(null); };
+  const handlePathGenerated = useCallback((path, _videos, _courses) => {
+    setPathData(path);
+    setStep('path');
+  }, []);
 
-  if (loading) return <LoadingScreen message={loadingMsg}/>;
-
-  if (step==='landing') return <LandingStep onSubmit={handleSuggestions}/>;
-  if (step==='suggestions') return <TopicSuggestionsStep data={suggestions} onSelect={handleSelect}/>;
-  if (step==='tutorial' && tutorial) return <TutorialStep tutorial={tutorial} topic={topic} onQuiz={handleQuiz}/>;
-  if (step==='quiz' && tutorial?.quiz) return <QuizStep quiz={tutorial.quiz} topic={topic} onResult={handleResult}/>;
-  if (step==='result' && result) return <ResultStep result={result} topic={topic} onRestart={handleRestart}/>;
-
-  return <LoadingScreen message="Loading..."/>;
+  return (
+    <>
+      <style>{css}</style>
+      {step === 'landing' && <LandingStep onSubmit={handleSearchDone} />}
+      {step === 'resources' && resources && (
+        <ResourcesStep data={resources} onGenerate={handlePathGenerated} onBack={reset} />
+      )}
+      {step === 'path' && pathData && (
+        <LearningPathStep pathData={pathData} topic={topic} onQuiz={() => setStep('quiz')} onBack={reset} />
+      )}
+      {step === 'quiz' && pathData && pathData.quiz && (
+        <QuizStep quiz={pathData.quiz} topic={topic} onResult={r => { setResult(r); setStep('result'); }} />
+      )}
+      {step === 'result' && result && (
+        <ResultStep result={result} topic={topic} onRestart={reset} />
+      )}
+    </>
+  );
 }

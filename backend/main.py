@@ -5,9 +5,11 @@ from typing import List, Optional
 import sqlite3
 import json
 import os
+import re
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import google.generativeai as genai
 from datetime import datetime
-import hashlib
 
 app = FastAPI(title="LearnAI API")
 
@@ -36,131 +38,272 @@ def init_db():
         user_id TEXT,
         timestamp TEXT
     )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS sessions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT UNIQUE,
-        topic TEXT,
-        subtopics TEXT,
-        duration INTEGER,
-        created_at TEXT
-    )''')
     conn.commit()
     conn.close()
 
 init_db()
 
 def get_model():
+    for model_name in ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-pro']:
+        try:
+            return genai.GenerativeModel(model_name)
+        except Exception:
+            continue
     return genai.GenerativeModel('gemini-1.5-flash')
+
+# ── Models ─────────────────────────────────────────────────────────────────────
 
 class TopicRequest(BaseModel):
     topic: str
 
-class TutorialRequest(BaseModel):
+class PathRequest(BaseModel):
     topic: str
-    subtopics: List[str]
-    duration: int  # in minutes
+    videos: List[dict]
+    courses: List[dict]
+    duration: int
 
 class QuizSubmission(BaseModel):
     topic: str
     answers: List[dict]
     user_id: str
 
-class QuizResult(BaseModel):
-    topic: str
-    score: float
-    total: int
-    user_id: str
+# ── Free course platforms ──────────────────────────────────────────────────────
+
+COURSE_DOMAINS = [
+    ('coursera.org', 'Coursera'),
+    ('edx.org', 'edX'),
+    ('khanacademy.org', 'Khan Academy'),
+    ('freecodecamp.org', 'freeCodeCamp'),
+    ('codecademy.com', 'Codecademy'),
+    ('udacity.com', 'Udacity'),
+    ('ocw.mit.edu', 'MIT OpenCourseWare'),
+    ('mit.edu', 'MIT OpenCourseWare'),
+    ('developer.mozilla.org', 'MDN Web Docs'),
+    ('w3schools.com', 'W3Schools'),
+    ('tutorialspoint.com', 'Tutorialspoint'),
+    ('geeksforgeeks.org', 'GeeksforGeeks'),
+    ('realpython.com', 'Real Python'),
+    ('kaggle.com', 'Kaggle'),
+    ('fast.ai', 'Fast.ai'),
+    ('theodinproject.com', 'The Odin Project'),
+    ('javascript.info', 'JavaScript.info'),
+    ('learnpython.org', 'LearnPython'),
+    ('cs50.harvard.edu', 'Harvard CS50'),
+    ('fullstackopen.com', 'Full Stack Open'),
+    ('eloquentjavascript.net', 'Eloquent JavaScript'),
+    ('leetcode.com', 'LeetCode'),
+    ('hackerrank.com', 'HackerRank'),
+    ('datacamp.com', 'DataCamp'),
+    ('brilliant.org', 'Brilliant'),
+]
+
+def extract_youtube_id(url: str) -> Optional[str]:
+    patterns = [
+        r'youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})',
+        r'youtu\.be/([a-zA-Z0-9_-]{11})',
+        r'youtube\.com/embed/([a-zA-Z0-9_-]{11})',
+        r'youtube\.com/v/([a-zA-Z0-9_-]{11})',
+    ]
+    for p in patterns:
+        m = re.search(p, url)
+        if m:
+            return m.group(1)
+    return None
+
+def _search_youtube_videos(topic: str) -> List[dict]:
+    """Search YouTube via DuckDuckGo text search (no API key needed)."""
+    videos = []
+    try:
+        from duckduckgo_search import DDGS
+        queries = [
+            f"{topic} tutorial beginner site:youtube.com",
+            f"{topic} full course youtube",
+            f"learn {topic} youtube tutorial",
+        ]
+        seen_urls = set()
+        for query in queries:
+            try:
+                with DDGS() as ddgs:
+                    results = list(ddgs.text(query, region="wt-wt", safesearch="moderate", max_results=8))
+                for r in results:
+                    url = r.get('href', '')
+                    if ('youtube.com/watch' in url or 'youtu.be/' in url) and url not in seen_urls:
+                        seen_urls.add(url)
+                        vid_id = extract_youtube_id(url)
+                        thumbnail = f"https://img.youtube.com/vi/{vid_id}/mqdefault.jpg" if vid_id else ''
+                        title = r.get('title', '').replace(' - YouTube', '').strip()
+                        videos.append({
+                            'title': title,
+                            'url': url,
+                            'thumbnail': thumbnail,
+                            'description': r.get('body', '')[:300],
+                            'platform': 'YouTube',
+                            'type': 'video',
+                            'video_id': vid_id or '',
+                        })
+                if len(videos) >= 8:
+                    break
+            except Exception as e:
+                print(f"DDG query error for '{query}': {e}")
+                continue
+    except ImportError:
+        print("duckduckgo_search not installed")
+    except Exception as e:
+        print(f"YouTube search error: {e}")
+    return videos[:8]
+
+
+def _search_free_courses(topic: str) -> List[dict]:
+    """Search free courses via DuckDuckGo text search."""
+    courses = []
+    try:
+        from duckduckgo_search import DDGS
+        queries = [
+            f"{topic} free course tutorial online learn",
+            f"{topic} coursera edx khanacademy free course",
+            f"{topic} freecodecamp w3schools geeksforgeeks tutorial",
+            f"learn {topic} free beginner course",
+        ]
+        seen_urls = set()
+        for query in queries:
+            try:
+                with DDGS() as ddgs:
+                    results = list(ddgs.text(query, region="wt-wt", safesearch="moderate", max_results=15))
+                for r in results:
+                    href = r.get('href', '')
+                    if href in seen_urls or 'youtube.com' in href:
+                        continue
+                    for domain, platform in COURSE_DOMAINS:
+                        if domain in href:
+                            seen_urls.add(href)
+                            courses.append({
+                                'title': r.get('title', ''),
+                                'url': href,
+                                'description': r.get('body', '')[:300],
+                                'platform': platform,
+                                'type': 'course',
+                                'free': True,
+                            })
+                            break
+                if len(courses) >= 10:
+                    break
+            except Exception as e:
+                print(f"DDG course query error for '{query}': {e}")
+                continue
+    except ImportError:
+        print("duckduckgo_search not installed")
+    except Exception as e:
+        print(f"Course search error: {e}")
+    return courses[:10]
+
+
+executor = ThreadPoolExecutor(max_workers=4)
+
+# ── Routes ─────────────────────────────────────────────────────────────────────
 
 @app.get("/")
 def root():
     return {"status": "LearnAI API running"}
 
-@app.post("/api/suggest-topics")
-async def suggest_topics(req: TopicRequest):
+
+@app.post("/api/search-resources")
+async def search_resources(req: TopicRequest):
+    """Search YouTube videos and free courses for a topic (no Gemini used)."""
     try:
-        model = get_model()
-        prompt = f"""You are a curriculum expert. The user wants to learn about: "{req.topic}"
-
-Search your knowledge and suggest 8-10 specific subtopics they should learn, ordered from beginner to advanced.
-Also suggest 3 related topics they might be interested in after mastering this topic.
-
-Return ONLY valid JSON in this exact format:
-{{
-  "main_topic": "cleaned up topic name",
-  "description": "2-3 sentence overview of what this topic is about",
-  "subtopics": [
-    {{"id": "1", "name": "subtopic name", "difficulty": "beginner|intermediate|advanced", "estimated_minutes": 15}},
-    ...
-  ],
-  "related_topics": ["topic1", "topic2", "topic3"],
-  "total_estimated_hours": 5
-}}"""
-
-        response = model.generate_content(prompt)
-        text = response.text.strip()
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        text = text.strip()
-        data = json.loads(text)
-        return data
+        loop = asyncio.get_event_loop()
+        videos_future = loop.run_in_executor(executor, _search_youtube_videos, req.topic)
+        courses_future = loop.run_in_executor(executor, _search_free_courses, req.topic)
+        videos, courses = await asyncio.gather(videos_future, courses_future)
+        return {
+            "topic": req.topic,
+            "videos": videos,
+            "courses": courses,
+            "total_found": len(videos) + len(courses),
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Search error: {str(e)}")
 
-@app.post("/api/generate-tutorial")
-async def generate_tutorial(req: TutorialRequest):
+
+@app.post("/api/generate-path")
+async def generate_path(req: PathRequest):
+    """Use Gemini to create a structured learning path from found resources."""
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
     try:
         model = get_model()
-        subtopics_str = ", ".join(req.subtopics)
-        prompt = f"""You are an expert educator. Create a comprehensive tutorial on "{req.topic}" covering these subtopics: {subtopics_str}.
-The user has {req.duration} minutes available.
 
-Create an engaging, well-structured tutorial with:
-- Clear explanations with real-world examples
-- Code examples where relevant (use markdown code blocks)
-- Key concepts highlighted
-- Practical exercises
+        resources_text = ""
+        if req.videos:
+            resources_text += "YOUTUBE VIDEOS:\n"
+            for i, v in enumerate(req.videos, 1):
+                resources_text += f'{i}. "{v["title"]}" — {v["url"]}\n'
+                if v.get('description'):
+                    resources_text += f'   {v["description"][:150]}\n'
 
-Return ONLY valid JSON:
+        if req.courses:
+            resources_text += "\nFREE COURSES & TUTORIALS:\n"
+            for i, c in enumerate(req.courses, 1):
+                resources_text += f'{i}. "{c["title"]}" ({c["platform"]}) — {c["url"]}\n'
+                if c.get('description'):
+                    resources_text += f'   {c["description"][:150]}\n'
+
+        prompt = f"""You are an expert curriculum designer. A student wants to learn "{req.topic}" in sessions of {req.duration} minutes.
+
+These real resources were found online:
+{resources_text}
+
+Create a structured learning path using ONLY resources from the list above (use their exact titles and URLs). Organise them into 2-4 progressive phases.
+
+Return ONLY valid JSON — no markdown fences, no extra text:
 {{
-  "title": "tutorial title",
-  "overview": "brief overview",
-  "sections": [
+  "title": "Learning Path: {req.topic}",
+  "overview": "2-3 sentence motivating description of this learning journey",
+  "phases": [
     {{
       "id": "1",
-      "title": "section title",
-      "content": "detailed markdown content with examples",
-      "key_points": ["point1", "point2"],
-      "has_code": true,
-      "estimated_minutes": 10
+      "name": "Phase 1: Foundations",
+      "description": "What you will learn and achieve in this phase",
+      "resources": [
+        {{
+          "title": "exact title from the list",
+          "url": "exact url from the list",
+          "type": "video or course",
+          "platform": "YouTube or platform name",
+          "estimated_minutes": 45,
+          "why": "One sentence explaining why this resource belongs here"
+        }}
+      ]
     }}
   ],
+  "key_skills": ["skill1", "skill2", "skill3", "skill4"],
+  "next_steps": ["advanced topic 1", "advanced topic 2", "advanced topic 3"],
   "quiz": [
     {{
       "id": "q1",
-      "question": "question text",
-      "options": ["A", "B", "C", "D"],
+      "question": "Conceptual question about {req.topic}",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
       "correct": 0,
-      "explanation": "why this is correct"
+      "explanation": "Why this answer is correct"
     }}
-  ],
-  "summary": "what you learned"
+  ]
 }}
 
-Generate 8-10 quiz questions covering all major concepts."""
+Generate 6-8 quiz questions testing core {req.topic} concepts. Use the EXACT URLs and titles from the resource list."""
 
         response = model.generate_content(prompt)
         text = response.text.strip()
+        # Strip markdown code fences if present
         if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
+            text = re.sub(r'^```(?:json)?\s*', '', text)
+            text = re.sub(r'\s*```$', '', text)
         text = text.strip()
         data = json.loads(text)
         return data
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail=f"Invalid JSON from AI: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI error: {str(e)}")
+
 
 @app.post("/api/submit-quiz")
 async def submit_quiz(submission: QuizSubmission):
@@ -172,21 +315,18 @@ async def submit_quiz(submission: QuizSubmission):
     c = conn.cursor()
     c.execute(
         "INSERT INTO quiz_results (topic, score, total, user_id, timestamp) VALUES (?, ?, ?, ?, ?)",
-        (submission.topic.lower(), score, total, submission.user_id, datetime.utcnow().isoformat())
+        (submission.topic.lower(), score, total, submission.user_id, datetime.utcnow().isoformat()),
     )
     conn.commit()
-
-    # Get stats for this topic
     c.execute("SELECT score FROM quiz_results WHERE topic LIKE ?", (f"%{submission.topic.lower()}%",))
     all_scores = [row[0] for row in c.fetchall()]
     conn.close()
 
     all_scores.sort()
     n = len(all_scores)
-    median = all_scores[n//2] if n > 0 else score
-    q1 = all_scores[n//4] if n > 0 else score
-    q3 = all_scores[3*n//4] if n > 0 else score
-
+    median = all_scores[n // 2] if n > 0 else score
+    q1 = all_scores[n // 4] if n > 0 else score
+    q3 = all_scores[3 * n // 4] if n > 0 else score
     percentile = sum(1 for s in all_scores if s < score) / n * 100 if n > 1 else 50
 
     proficiency = "Beginner"
@@ -209,9 +349,10 @@ async def submit_quiz(submission: QuizSubmission):
             "median": round(median, 1),
             "q1": round(q1, 1),
             "q3": round(q3, 1),
-            "total_participants": n
-        }
+            "total_participants": n,
+        },
     }
+
 
 @app.get("/api/leaderboard/{topic}")
 async def get_leaderboard(topic: str):
@@ -219,7 +360,7 @@ async def get_leaderboard(topic: str):
     c = conn.cursor()
     c.execute(
         "SELECT score, timestamp FROM quiz_results WHERE topic LIKE ? ORDER BY score DESC LIMIT 20",
-        (f"%{topic.lower()}%",)
+        (f"%{topic.lower()}%",),
     )
     rows = c.fetchall()
     conn.close()
