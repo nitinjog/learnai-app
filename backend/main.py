@@ -10,7 +10,6 @@ import asyncio
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
-import google.generativeai as genai
 from datetime import datetime
 
 app = FastAPI(title="LearnAI API")
@@ -24,9 +23,6 @@ app.add_middleware(
 )
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 
 DB_PATH = "learnai.db"
@@ -47,13 +43,35 @@ def init_db():
 
 init_db()
 
-def get_model():
-    for model_name in ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-pro']:
+def gemini_generate(prompt: str) -> str:
+    """Call Gemini REST API directly — no SDK, no compilation required."""
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY not configured")
+    # Try models in order of preference
+    for model in ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-pro"]:
+        url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={GEMINI_API_KEY}"
+        )
+        payload = json.dumps({
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8192},
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         try:
-            return genai.GenerativeModel(model_name)
-        except Exception:
-            continue
-    return genai.GenerativeModel('gemini-1.5-flash')
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                return data["candidates"][0]["content"]["parts"][0]["text"]
+        except urllib.error.HTTPError as e:
+            if e.code in (400, 404):
+                continue  # try next model
+            raise
+    raise RuntimeError("All Gemini models failed")
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 
@@ -238,8 +256,6 @@ async def generate_path(req: PathRequest):
     if not GEMINI_API_KEY:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
     try:
-        model = get_model()
-
         resources_text = ""
         if req.videos:
             resources_text += "YOUTUBE VIDEOS:\n"
@@ -298,8 +314,9 @@ Return ONLY valid JSON — no markdown fences, no extra text:
 
 Generate 6-8 quiz questions testing core {req.topic} concepts. Use the EXACT URLs and titles from the resource list."""
 
-        response = model.generate_content(prompt)
-        text = response.text.strip()
+        loop = asyncio.get_event_loop()
+        text = await loop.run_in_executor(executor, gemini_generate, prompt)
+        text = text.strip()
         # Strip markdown code fences if present
         if text.startswith("```"):
             text = re.sub(r'^```(?:json)?\s*', '', text)
