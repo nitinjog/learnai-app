@@ -47,7 +47,7 @@ def gemini_generate(prompt: str) -> str:
     """Call Gemini REST API directly — no SDK, no compilation required."""
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY not configured")
-    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-8b"]
+    models = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
     last_error = None
     for model in models:
         url = (
