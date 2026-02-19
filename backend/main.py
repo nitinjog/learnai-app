@@ -7,6 +7,8 @@ import json
 import os
 import re
 import asyncio
+import urllib.request
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 import google.generativeai as genai
 from datetime import datetime
@@ -112,23 +114,39 @@ def extract_youtube_id(url: str) -> Optional[str]:
             return m.group(1)
     return None
 
-def _search_youtube_videos(topic: str) -> List[dict]:
-    """Search YouTube via Tavily API."""
-    videos = []
+def _tavily_search(query: str, include_domains: List[str], max_results: int) -> List[dict]:
+    """Call Tavily Search REST API directly (no SDK dependency)."""
     if not TAVILY_API_KEY:
         print("TAVILY_API_KEY not set")
-        return videos
+        return []
+    payload = json.dumps({
+        "api_key": TAVILY_API_KEY,
+        "query": query,
+        "search_depth": "basic",
+        "include_domains": include_domains,
+        "max_results": max_results,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.tavily.com/search",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode("utf-8")).get("results", [])
+
+
+def _search_youtube_videos(topic: str) -> List[dict]:
+    """Search YouTube via Tavily REST API."""
+    videos = []
     try:
-        from tavily import TavilyClient
-        client = TavilyClient(api_key=TAVILY_API_KEY)
-        results = client.search(
+        results = _tavily_search(
             query=f"{topic} tutorial youtube",
-            search_depth="basic",
             include_domains=["youtube.com"],
             max_results=8,
         )
         seen_urls = set()
-        for r in results.get("results", []):
+        for r in results:
             url = r.get("url", "")
             if ("youtube.com/watch" in url or "youtu.be/" in url) and url not in seen_urls:
                 seen_urls.add(url)
@@ -149,17 +167,11 @@ def _search_youtube_videos(topic: str) -> List[dict]:
 
 
 def _search_free_courses(topic: str) -> List[dict]:
-    """Search free courses via Tavily API."""
+    """Search free courses via Tavily REST API."""
     courses = []
-    if not TAVILY_API_KEY:
-        print("TAVILY_API_KEY not set")
-        return courses
     try:
-        from tavily import TavilyClient
-        client = TavilyClient(api_key=TAVILY_API_KEY)
-        results = client.search(
+        results = _tavily_search(
             query=f"{topic} free course tutorial learn online",
-            search_depth="basic",
             include_domains=[
                 "coursera.org", "edx.org", "khanacademy.org",
                 "freecodecamp.org", "codecademy.com", "w3schools.com",
@@ -171,7 +183,7 @@ def _search_free_courses(topic: str) -> List[dict]:
             max_results=10,
         )
         seen_urls = set()
-        for r in results.get("results", []):
+        for r in results:
             url = r.get("url", "")
             if url in seen_urls:
                 continue
