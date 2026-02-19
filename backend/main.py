@@ -47,8 +47,9 @@ def gemini_generate(prompt: str) -> str:
     """Call Gemini REST API directly — no SDK, no compilation required."""
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY not configured")
-    # Try models in order of preference
-    for model in ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-pro"]:
+    models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-8b"]
+    last_error = None
+    for model in models:
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{model}:generateContent?key={GEMINI_API_KEY}"
@@ -68,10 +69,11 @@ def gemini_generate(prompt: str) -> str:
                 data = json.loads(resp.read().decode("utf-8"))
                 return data["candidates"][0]["content"]["parts"][0]["text"]
         except urllib.error.HTTPError as e:
-            if e.code in (400, 404):
+            last_error = e
+            if e.code in (400, 404, 429, 503):
                 continue  # try next model
             raise
-    raise RuntimeError("All Gemini models failed")
+    raise RuntimeError(f"All Gemini models failed: {last_error}")
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 
