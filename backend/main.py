@@ -25,6 +25,8 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
+
 DB_PATH = "learnai.db"
 
 def init_db():
@@ -111,89 +113,83 @@ def extract_youtube_id(url: str) -> Optional[str]:
     return None
 
 def _search_youtube_videos(topic: str) -> List[dict]:
-    """Search YouTube via DuckDuckGo text search (no API key needed)."""
+    """Search YouTube via Tavily API."""
     videos = []
+    if not TAVILY_API_KEY:
+        print("TAVILY_API_KEY not set")
+        return videos
     try:
-        from duckduckgo_search import DDGS
-        queries = [
-            f"{topic} tutorial beginner site:youtube.com",
-            f"{topic} full course youtube",
-            f"learn {topic} youtube tutorial",
-        ]
+        from tavily import TavilyClient
+        client = TavilyClient(api_key=TAVILY_API_KEY)
+        results = client.search(
+            query=f"{topic} tutorial youtube",
+            search_depth="basic",
+            include_domains=["youtube.com"],
+            max_results=8,
+        )
         seen_urls = set()
-        for query in queries:
-            try:
-                with DDGS() as ddgs:
-                    results = list(ddgs.text(query, region="wt-wt", safesearch="moderate", max_results=8))
-                for r in results:
-                    url = r.get('href', '')
-                    if ('youtube.com/watch' in url or 'youtu.be/' in url) and url not in seen_urls:
-                        seen_urls.add(url)
-                        vid_id = extract_youtube_id(url)
-                        thumbnail = f"https://img.youtube.com/vi/{vid_id}/mqdefault.jpg" if vid_id else ''
-                        title = r.get('title', '').replace(' - YouTube', '').strip()
-                        videos.append({
-                            'title': title,
-                            'url': url,
-                            'thumbnail': thumbnail,
-                            'description': r.get('body', '')[:300],
-                            'platform': 'YouTube',
-                            'type': 'video',
-                            'video_id': vid_id or '',
-                        })
-                if len(videos) >= 8:
-                    break
-            except Exception as e:
-                print(f"DDG query error for '{query}': {e}")
-                continue
-    except ImportError:
-        print("duckduckgo_search not installed")
+        for r in results.get("results", []):
+            url = r.get("url", "")
+            if ("youtube.com/watch" in url or "youtu.be/" in url) and url not in seen_urls:
+                seen_urls.add(url)
+                vid_id = extract_youtube_id(url)
+                thumbnail = f"https://img.youtube.com/vi/{vid_id}/mqdefault.jpg" if vid_id else ""
+                videos.append({
+                    "title": r.get("title", "").replace(" - YouTube", "").strip(),
+                    "url": url,
+                    "thumbnail": thumbnail,
+                    "description": r.get("content", "")[:300],
+                    "platform": "YouTube",
+                    "type": "video",
+                    "video_id": vid_id or "",
+                })
     except Exception as e:
-        print(f"YouTube search error: {e}")
+        print(f"Tavily YouTube search error: {e}")
     return videos[:8]
 
 
 def _search_free_courses(topic: str) -> List[dict]:
-    """Search free courses via DuckDuckGo text search."""
+    """Search free courses via Tavily API."""
     courses = []
+    if not TAVILY_API_KEY:
+        print("TAVILY_API_KEY not set")
+        return courses
     try:
-        from duckduckgo_search import DDGS
-        queries = [
-            f"{topic} free course tutorial online learn",
-            f"{topic} coursera edx khanacademy free course",
-            f"{topic} freecodecamp w3schools geeksforgeeks tutorial",
-            f"learn {topic} free beginner course",
-        ]
+        from tavily import TavilyClient
+        client = TavilyClient(api_key=TAVILY_API_KEY)
+        results = client.search(
+            query=f"{topic} free course tutorial learn online",
+            search_depth="basic",
+            include_domains=[
+                "coursera.org", "edx.org", "khanacademy.org",
+                "freecodecamp.org", "codecademy.com", "w3schools.com",
+                "developer.mozilla.org", "geeksforgeeks.org", "realpython.com",
+                "kaggle.com", "theodinproject.com", "javascript.info",
+                "cs50.harvard.edu", "fast.ai", "tutorialspoint.com",
+                "fullstackopen.com", "learnpython.org", "ocw.mit.edu",
+            ],
+            max_results=10,
+        )
         seen_urls = set()
-        for query in queries:
-            try:
-                with DDGS() as ddgs:
-                    results = list(ddgs.text(query, region="wt-wt", safesearch="moderate", max_results=15))
-                for r in results:
-                    href = r.get('href', '')
-                    if href in seen_urls or 'youtube.com' in href:
-                        continue
-                    for domain, platform in COURSE_DOMAINS:
-                        if domain in href:
-                            seen_urls.add(href)
-                            courses.append({
-                                'title': r.get('title', ''),
-                                'url': href,
-                                'description': r.get('body', '')[:300],
-                                'platform': platform,
-                                'type': 'course',
-                                'free': True,
-                            })
-                            break
-                if len(courses) >= 10:
-                    break
-            except Exception as e:
-                print(f"DDG course query error for '{query}': {e}")
+        for r in results.get("results", []):
+            url = r.get("url", "")
+            if url in seen_urls:
                 continue
-    except ImportError:
-        print("duckduckgo_search not installed")
+            seen_urls.add(url)
+            platform = next(
+                (name for domain, name in COURSE_DOMAINS if domain in url),
+                "Free Course"
+            )
+            courses.append({
+                "title": r.get("title", ""),
+                "url": url,
+                "description": r.get("content", "")[:300],
+                "platform": platform,
+                "type": "course",
+                "free": True,
+            })
     except Exception as e:
-        print(f"Course search error: {e}")
+        print(f"Tavily course search error: {e}")
     return courses[:10]
 
 
