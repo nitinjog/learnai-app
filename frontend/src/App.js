@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 
 const API_URL = process.env.REACT_APP_API_URL || 'https://learnai-backend-p96s.onrender.com';
 
@@ -29,6 +29,14 @@ function getScores(topic) {
     const all = JSON.parse(localStorage.getItem('lai_scores') || '{}');
     return (all[topic.toLowerCase().slice(0, 40)] || []).sort((a, b) => a - b);
   } catch (e) { return []; }
+}
+
+// ── Duration helpers ───────────────────────────────────────────────────────────
+function fmtMins(totalMins) {
+  if (totalMins < 60) return `${totalMins} min`;
+  const h = Math.floor(totalMins / 60);
+  const m = totalMins % 60;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
 // ── Styles ─────────────────────────────────────────────────────────────────────
@@ -69,6 +77,7 @@ const css = `
   .card-desc { color: #64748b; font-size: 0.78rem; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .card-footer { padding: 0 14px 12px; display: flex; align-items: center; justify-content: space-between; }
   .platform-badge { font-size: 0.7rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; }
+  .dur-badge { font-size: 0.7rem; font-weight: 600; padding: 2px 7px; border-radius: 6px; background: rgba(56,189,248,0.1); color: #38bdf8; border: 1px solid rgba(56,189,248,0.2); display: flex; align-items: center; gap: 3px; }
   .check-circle { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #4b5563; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 11px; color: #fff; transition: all .15s; }
   .check-circle.on-blue { background: #6366f1; border-color: #6366f1; }
   .check-circle.on-green { background: #22c55e; border-color: #22c55e; }
@@ -131,6 +140,20 @@ const css = `
   .loading-step { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 10px; background: rgba(99,102,241,0.06); border: 1px solid rgba(99,102,241,0.15); }
   .loading-step.done { border-color: rgba(34,197,94,0.3); background: rgba(34,197,94,0.05); }
   .loading-step.active { border-color: rgba(99,102,241,0.4); animation: pulse 1.5s ease-in-out infinite; }
+
+  /* Duration panel */
+  .dur-panel { background: rgba(8,8,24,0.85); border: 1.5px solid rgba(56,189,248,0.25); border-radius: 16px; padding: 18px 20px; margin-bottom: 16px; }
+  .dur-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+  .dur-seg { display: flex; align-items: center; gap: 6px; background: rgba(56,189,248,0.07); border: 1px solid rgba(56,189,248,0.18); border-radius: 8px; padding: 5px 10px; }
+  .dur-seg-course { background: rgba(34,197,94,0.07); border-color: rgba(34,197,94,0.2); }
+  .dur-total-box { background: linear-gradient(135deg,rgba(99,102,241,0.12),rgba(139,92,246,0.1)); border: 1.5px solid rgba(99,102,241,0.3); border-radius: 12px; padding: 12px 16px; display: flex; align-items: center; gap: 12px; }
+  .dur-total-num { font-size: 1.9rem; font-weight: 900; background: linear-gradient(135deg,#818cf8,#c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+  .sessions-hint { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 8px; background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.2); font-size: 0.78rem; color: #fbbf24; font-weight: 600; white-space: nowrap; }
+
+  /* Session length slider panel */
+  .session-panel { background: rgba(99,102,241,0.05); border: 1px solid rgba(99,102,241,0.15); border-radius: 14px; padding: 20px; margin-top: 8px; }
+  input[type=range] { width: 100%; accent-color: #6366f1; }
+
   @media (max-width: 700px) { .card { padding: 20px; } .grid-resources { grid-template-columns: repeat(auto-fill,minmax(160px,1fr)); } .resource-thumb { width: 60px; height: 40px; } .chart-bars { height: 100px; } }
 `;
 
@@ -244,7 +267,7 @@ function LandingStep({ onSubmit }) {
           <div style={{ color: '#38bdf8', fontWeight: 700, fontSize: '0.82rem', marginBottom: 5 }}>💡 How it works</div>
           <div style={{ color: '#64748b', fontSize: '0.8rem', lineHeight: 1.7 }}>
             1. We search the web for real YouTube videos & free courses on your topic<br />
-            2. You pick which resources to include<br />
+            2. You pick which resources to include and set your daily study session length<br />
             3. Gemini AI arranges them into a smart, progressive learning path<br />
             4. Take a quiz to test your knowledge!
           </div>
@@ -254,11 +277,65 @@ function LandingStep({ onSubmit }) {
   );
 }
 
+// ── Duration Summary Panel ─────────────────────────────────────────────────────
+function DurationPanel({ selVideoMins, selCourseMins, sessionMins }) {
+  const totalMins = selVideoMins + selCourseMins;
+  const sessions = sessionMins > 0 ? Math.ceil(totalMins / sessionMins) : 0;
+
+  if (totalMins === 0) return null;
+
+  return (
+    <div className="dur-panel mb16">
+      <div style={{ color: '#38bdf8', fontWeight: 700, fontSize: '0.78rem', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+        ⏱ Tentative Learning Duration
+      </div>
+
+      {/* Breakdown row */}
+      <div className="dur-row">
+        {selVideoMins > 0 && (
+          <div className="dur-seg">
+            <span style={{ color: '#ff4444', fontSize: '0.85rem' }}>▶</span>
+            <span style={{ color: '#94a3b8', fontSize: '0.78rem' }}>Videos</span>
+            <span style={{ color: '#38bdf8', fontWeight: 700, fontSize: '0.82rem' }}>{fmtMins(selVideoMins)}</span>
+          </div>
+        )}
+        {selVideoMins > 0 && selCourseMins > 0 && (
+          <span style={{ color: '#4b5563', fontSize: '1rem' }}>+</span>
+        )}
+        {selCourseMins > 0 && (
+          <div className="dur-seg dur-seg-course">
+            <span style={{ color: '#22c55e', fontSize: '0.85rem' }}>📚</span>
+            <span style={{ color: '#94a3b8', fontSize: '0.78rem' }}>Courses</span>
+            <span style={{ color: '#22c55e', fontWeight: 700, fontSize: '0.82rem' }}>{fmtMins(selCourseMins)}</span>
+          </div>
+        )}
+        <span style={{ color: '#4b5563', fontSize: '1rem' }}>=</span>
+        <div className="dur-total-box" style={{ flex: 1, minWidth: 180 }}>
+          <div>
+            <div style={{ color: '#64748b', fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Total content</div>
+            <div className="dur-total-num">{fmtMins(totalMins)}</div>
+          </div>
+          {sessions > 0 && (
+            <div className="sessions-hint" style={{ marginLeft: 'auto' }}>
+              ~{sessions} session{sessions !== 1 ? 's' : ''}<br />
+              <span style={{ fontSize: '0.7rem', opacity: 0.8 }}>at {sessionMins} min/day</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ color: '#475569', fontSize: '0.75rem', marginTop: 6 }}>
+        Estimates based on typical resource length. Gemini will assign precise durations per resource in your path.
+      </div>
+    </div>
+  );
+}
+
 // ── Step 2: Resources ──────────────────────────────────────────────────────────
 function ResourcesStep({ data, onGenerate, onBack }) {
   const [selVideos, setSelVideos] = useState(() => (data.videos || []).map((_, i) => i));
   const [selCourses, setSelCourses] = useState(() => (data.courses || []).map((_, i) => i));
-  const [dur, setDur] = useState(60);
+  const [sessionMins, setSessionMins] = useState(60);
   const [tab, setTab] = useState('videos');
   const [loading, setLoading] = useState(false);
   const [loadStep, setLoadStep] = useState(0);
@@ -267,6 +344,16 @@ function ResourcesStep({ data, onGenerate, onBack }) {
   const videos = data.videos || [];
   const courses = data.courses || [];
   const selCount = selVideos.length + selCourses.length;
+
+  // Live tentative duration of selected resources
+  const selVideoMins = useMemo(
+    () => selVideos.reduce((sum, i) => sum + (videos[i]?.estimated_minutes || 20), 0),
+    [selVideos, videos]
+  );
+  const selCourseMins = useMemo(
+    () => selCourses.reduce((sum, i) => sum + (courses[i]?.estimated_minutes || 120), 0),
+    [selCourses, courses]
+  );
 
   const toggleVideo = i => setSelVideos(p => p.includes(i) ? p.filter(x => x !== i) : [...p, i]);
   const toggleCourse = i => setSelCourses(p => p.includes(i) ? p.filter(x => x !== i) : [...p, i]);
@@ -282,7 +369,7 @@ function ResourcesStep({ data, onGenerate, onBack }) {
         topic: data.topic,
         videos: pickedVideos,
         courses: pickedCourses,
-        duration: dur,
+        duration: sessionMins,
       });
       setLoadStep(3);
       onGenerate(path, pickedVideos, pickedCourses);
@@ -356,7 +443,12 @@ function ResourcesStep({ data, onGenerate, onBack }) {
                         {v.description && <div className="card-desc">{v.description}</div>}
                       </div>
                       <div className="card-footer">
-                        <span className="platform-badge" style={{ background: 'rgba(255,0,0,0.12)', color: '#ff4444', border: '1px solid rgba(255,0,0,0.2)' }}>▶ YouTube</span>
+                        <div className="flex gap6 flex-center" style={{ flexWrap: 'wrap', gap: 5 }}>
+                          <span className="platform-badge" style={{ background: 'rgba(255,0,0,0.12)', color: '#ff4444', border: '1px solid rgba(255,0,0,0.2)' }}>▶ YouTube</span>
+                          {v.estimated_minutes && (
+                            <span className="dur-badge">⏱ ~{fmtMins(v.estimated_minutes)}</span>
+                          )}
+                        </div>
                         <div className={`check-circle ${sel ? 'on-blue' : ''}`}>{sel ? '✓' : ''}</div>
                       </div>
                     </div>
@@ -395,7 +487,14 @@ function ResourcesStep({ data, onGenerate, onBack }) {
                         {c.description && <div className="card-desc">{c.description}</div>}
                       </div>
                       <div className="card-footer">
-                        <span className="platform-badge" style={{ background: ps.bg, color: ps.color, border: `1px solid ${ps.border}` }}>{c.platform}</span>
+                        <div className="flex gap6 flex-center" style={{ flexWrap: 'wrap', gap: 5 }}>
+                          <span className="platform-badge" style={{ background: ps.bg, color: ps.color, border: `1px solid ${ps.border}` }}>{c.platform}</span>
+                          {c.estimated_minutes && (
+                            <span className="dur-badge" style={{ background: 'rgba(34,197,94,0.08)', color: '#22c55e', borderColor: 'rgba(34,197,94,0.2)' }}>
+                              ⏱ ~{fmtMins(c.estimated_minutes)}
+                            </span>
+                          )}
+                        </div>
                         <div className={`check-circle ${sel ? 'on-green' : ''}`}>{sel ? '✓' : ''}</div>
                       </div>
                     </div>
@@ -406,20 +505,38 @@ function ResourcesStep({ data, onGenerate, onBack }) {
           </>
         )}
 
-        {/* Duration + Generate */}
-        <div style={{ padding: 20, background: 'rgba(99,102,241,0.05)', border: '1px solid rgba(99,102,241,0.15)', borderRadius: 14, marginTop: 8 }}>
-          <label className="lbl">Session Duration: {dur} minutes</label>
-          <input type="range" min={15} max={180} step={15} value={dur} onChange={e => setDur(+e.target.value)}
-            style={{ width: '100%', accentColor: '#6366f1', marginBottom: 4 }} />
-          <div className="flex justify-between mb16" style={{ color: '#64748b', fontSize: '0.72rem' }}>
-            <span>15 min</span><span>3 hours</span>
+        {/* Tentative Duration Panel — appears once at least one resource is selected */}
+        <DurationPanel
+          selVideoMins={selVideoMins}
+          selCourseMins={selCourseMins}
+          sessionMins={sessionMins}
+        />
+
+        {/* Session length + Generate */}
+        <div className="session-panel">
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <label className="lbl" style={{ marginBottom: 0 }}>Daily Study Session Length</label>
+              <span style={{ background: 'rgba(99,102,241,0.18)', color: '#818cf8', fontWeight: 800, fontSize: '1rem', padding: '4px 14px', borderRadius: 8 }}>
+                {fmtMins(sessionMins)}
+              </span>
+            </div>
+            <input type="range" min={15} max={180} step={15} value={sessionMins}
+              onChange={e => setSessionMins(+e.target.value)}
+              style={{ marginBottom: 4 }} />
+            <div className="flex justify-between" style={{ color: '#64748b', fontSize: '0.72rem' }}>
+              <span>15 min</span><span>30</span><span>45</span><span>1h</span><span>1.5h</span><span>2h</span><span>2.5h</span><span>3h</span>
+            </div>
+            <div style={{ color: '#475569', fontSize: '0.75rem', marginTop: 6 }}>
+              Gemini will structure the learning path into sessions of this length.
+            </div>
           </div>
 
           {err && <div className="err mb12">{err}</div>}
 
           <button className="btn" style={{ width: '100%', fontSize: '1rem', padding: '15px' }}
             disabled={selCount === 0} onClick={go}>
-            🤖 Generate AI Learning Path ({selCount} resource{selCount !== 1 ? 's' : ''} · {dur} min)
+            🤖 Generate AI Learning Path ({selCount} resource{selCount !== 1 ? 's' : ''} · {fmtMins(sessionMins)}/session)
           </button>
           {selCount === 0 && <p style={{ color: '#64748b', textAlign: 'center', marginTop: 8, fontSize: '0.82rem' }}>Select at least one resource above</p>}
         </div>
@@ -432,6 +549,11 @@ function ResourcesStep({ data, onGenerate, onBack }) {
 function LearningPathStep({ pathData, topic, onQuiz, onBack }) {
   const phases = pathData.phases || [];
   const quiz = pathData.quiz || [];
+
+  // Sum estimated minutes across all phases
+  const totalPathMins = phases.reduce((sum, ph) =>
+    sum + (ph.resources || []).reduce((s, r) => s + (r.estimated_minutes || 0), 0), 0
+  );
 
   function ResourceCard({ res }) {
     const isVideo = res.type === 'video' || res.platform === 'YouTube';
@@ -455,7 +577,7 @@ function LearningPathStep({ pathData, topic, onQuiz, onBack }) {
           {res.why && <div style={{ color: '#64748b', fontSize: '0.78rem', marginBottom: 5, fontStyle: 'italic' }}>{res.why}</div>}
           <div className="flex gap8 flex-center">
             <span className="platform-badge" style={{ background: ps.bg, color: ps.color, border: `1px solid ${ps.border}`, fontSize: '0.7rem', padding: '2px 7px', borderRadius: 5 }}>{res.platform}</span>
-            {res.estimated_minutes && <span style={{ color: '#64748b', fontSize: '0.75rem' }}>⏱ ~{res.estimated_minutes} min</span>}
+            {res.estimated_minutes && <span style={{ color: '#38bdf8', fontSize: '0.75rem', fontWeight: 600 }}>⏱ ~{fmtMins(res.estimated_minutes)}</span>}
             <a href={res.url} target="_blank" rel="noopener noreferrer"
               style={{ marginLeft: 'auto', color: '#818cf8', fontSize: '0.78rem', textDecoration: 'none', background: 'rgba(99,102,241,0.1)', padding: '4px 10px', borderRadius: 6, border: '1px solid rgba(99,102,241,0.25)', whiteSpace: 'nowrap' }}
               onClick={e => e.stopPropagation()}>
@@ -476,7 +598,10 @@ function LearningPathStep({ pathData, topic, onQuiz, onBack }) {
             <div style={{ fontWeight: 700, color: '#e2e8f0', fontSize: '0.95rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {pathData.title || `Learning Path: ${topic}`}
             </div>
-            <div style={{ color: '#64748b', fontSize: '0.75rem' }}>{phases.length} phases · {quiz.length} quiz questions</div>
+            <div style={{ color: '#64748b', fontSize: '0.75rem' }}>
+              {phases.length} phases · {quiz.length} quiz questions
+              {totalPathMins > 0 && <span style={{ color: '#38bdf8', marginLeft: 8 }}>· ⏱ ~{fmtMins(totalPathMins)} total</span>}
+            </div>
           </div>
           {quiz.length > 0 && (
             <button className="btn" style={{ padding: '10px 18px', fontSize: '0.9rem' }} onClick={onQuiz}>Take Quiz 📝</button>
@@ -490,24 +615,44 @@ function LearningPathStep({ pathData, topic, onQuiz, onBack }) {
           <div style={{ background: 'rgba(99,102,241,0.07)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: 14, padding: '18px 22px', marginBottom: 28 }}>
             <div style={{ color: '#818cf8', fontWeight: 700, marginBottom: 8 }}>📋 Overview</div>
             <p style={{ color: '#cbd5e1', lineHeight: 1.75, fontSize: '0.95rem' }}>{pathData.overview}</p>
+            {totalPathMins > 0 && (
+              <div style={{ marginTop: 12, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <span style={{ background: 'rgba(56,189,248,0.1)', border: '1px solid rgba(56,189,248,0.25)', borderRadius: 8, padding: '4px 12px', color: '#38bdf8', fontSize: '0.82rem', fontWeight: 700 }}>
+                  ⏱ Total: ~{fmtMins(totalPathMins)}
+                </span>
+                <span style={{ background: 'rgba(99,102,241,0.1)', border: '1px solid rgba(99,102,241,0.25)', borderRadius: 8, padding: '4px 12px', color: '#818cf8', fontSize: '0.82rem', fontWeight: 700 }}>
+                  {phases.length} phases
+                </span>
+              </div>
+            )}
           </div>
         )}
 
         {/* Phases */}
-        {phases.map((phase, pi) => (
-          <div key={phase.id || pi} className="phase-card">
-            <div className="flex gap12 flex-center mb12">
-              <div className="phase-num">{pi + 1}</div>
-              <div>
-                <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#e2e8f0' }}>{phase.name}</div>
-                {phase.description && <div style={{ color: '#94a3b8', fontSize: '0.83rem', marginTop: 2 }}>{phase.description}</div>}
+        {phases.map((phase, pi) => {
+          const phaseMins = (phase.resources || []).reduce((s, r) => s + (r.estimated_minutes || 0), 0);
+          return (
+            <div key={phase.id || pi} className="phase-card">
+              <div className="flex gap12 flex-center mb12">
+                <div className="phase-num">{pi + 1}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <div style={{ fontWeight: 800, fontSize: '1.05rem', color: '#e2e8f0' }}>{phase.name}</div>
+                    {phaseMins > 0 && (
+                      <span style={{ background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.2)', borderRadius: 6, padding: '2px 8px', color: '#38bdf8', fontSize: '0.75rem', fontWeight: 700 }}>
+                        ⏱ ~{fmtMins(phaseMins)}
+                      </span>
+                    )}
+                  </div>
+                  {phase.description && <div style={{ color: '#94a3b8', fontSize: '0.83rem', marginTop: 2 }}>{phase.description}</div>}
+                </div>
               </div>
+              {(phase.resources || []).map((res, ri) => (
+                <ResourceCard key={ri} res={res} />
+              ))}
             </div>
-            {(phase.resources || []).map((res, ri) => (
-              <ResourceCard key={ri} res={res} />
-            ))}
-          </div>
-        ))}
+          );
+        })}
 
         {/* Key Skills */}
         {(pathData.key_skills || []).length > 0 && (

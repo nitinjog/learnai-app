@@ -91,6 +91,61 @@ class QuizSubmission(BaseModel):
     answers: List[dict]
     user_id: str
 
+# ── Duration estimation ────────────────────────────────────────────────────────
+
+# Estimated minutes per platform for a typical resource
+PLATFORM_DURATIONS = {
+    'YouTube':            20,   # per-video average
+    'Coursera':          240,   # ~4 h typical course
+    'edX':               240,
+    'Khan Academy':       60,
+    'freeCodeCamp':      300,   # long video tutorials
+    'Codecademy':        120,
+    'Udacity':           180,
+    'MIT OpenCourseWare': 300,
+    'MDN Web Docs':       60,
+    'W3Schools':          45,
+    'Tutorialspoint':     45,
+    'GeeksforGeeks':      45,
+    'Real Python':        60,
+    'Kaggle':            120,
+    'Fast.ai':           300,
+    'The Odin Project':  360,
+    'JavaScript.info':    90,
+    'LearnPython':        60,
+    'Harvard CS50':      360,
+    'Full Stack Open':   360,
+    'Eloquent JavaScript': 180,
+    'LeetCode':           60,
+    'HackerRank':         60,
+    'DataCamp':          180,
+    'Brilliant':         120,
+    'Free Course':       120,   # generic default
+}
+
+
+def _estimate_duration_from_text(title: str, description: str, default: int) -> int:
+    """Parse explicit duration hints from title/description text.
+
+    Recognises patterns like:
+      "10 Hours Python Tutorial", "45-minute crash course", "2h beginner guide"
+    Returns minutes, capped at 600 (10 h).
+    """
+    text = (title + " " + description).lower()
+
+    # "X hour(s)" / "Xh" style
+    m = re.search(r'(\d+(?:\.\d+)?)\s*(?:hour|hr)', text)
+    if m:
+        return min(int(float(m.group(1)) * 60), 600)
+
+    # "X minute(s)" / "Xmin"
+    m = re.search(r'(\d+)\s*(?:minute|min)', text)
+    if m:
+        return min(int(m.group(1)), 600)
+
+    return default
+
+
 # ── Free course platforms ──────────────────────────────────────────────────────
 
 COURSE_DOMAINS = [
@@ -157,7 +212,7 @@ def _tavily_search(query: str, include_domains: List[str], max_results: int) -> 
 
 
 def _search_youtube_videos(topic: str) -> List[dict]:
-    """Search YouTube via Tavily REST API."""
+    """Search YouTube via Tavily REST API and attach estimated durations."""
     videos = []
     try:
         results = _tavily_search(
@@ -172,14 +227,20 @@ def _search_youtube_videos(topic: str) -> List[dict]:
                 seen_urls.add(url)
                 vid_id = extract_youtube_id(url)
                 thumbnail = f"https://img.youtube.com/vi/{vid_id}/mqdefault.jpg" if vid_id else ""
+                title = r.get("title", "").replace(" - YouTube", "").strip()
+                description = r.get("content", "")[:300]
+                estimated_minutes = _estimate_duration_from_text(
+                    title, description, PLATFORM_DURATIONS['YouTube']
+                )
                 videos.append({
-                    "title": r.get("title", "").replace(" - YouTube", "").strip(),
+                    "title": title,
                     "url": url,
                     "thumbnail": thumbnail,
-                    "description": r.get("content", "")[:300],
+                    "description": description,
                     "platform": "YouTube",
                     "type": "video",
                     "video_id": vid_id or "",
+                    "estimated_minutes": estimated_minutes,
                 })
     except Exception as e:
         print(f"Tavily YouTube search error: {e}")
@@ -187,7 +248,7 @@ def _search_youtube_videos(topic: str) -> List[dict]:
 
 
 def _search_free_courses(topic: str) -> List[dict]:
-    """Search free courses via Tavily REST API."""
+    """Search free courses via Tavily REST API and attach estimated durations."""
     courses = []
     try:
         results = _tavily_search(
@@ -212,13 +273,18 @@ def _search_free_courses(topic: str) -> List[dict]:
                 (name for domain, name in COURSE_DOMAINS if domain in url),
                 "Free Course"
             )
+            title = r.get("title", "")
+            description = r.get("content", "")[:300]
+            platform_default = PLATFORM_DURATIONS.get(platform, PLATFORM_DURATIONS['Free Course'])
+            estimated_minutes = _estimate_duration_from_text(title, description, platform_default)
             courses.append({
-                "title": r.get("title", ""),
+                "title": title,
                 "url": url,
-                "description": r.get("content", "")[:300],
+                "description": description,
                 "platform": platform,
                 "type": "course",
                 "free": True,
+                "estimated_minutes": estimated_minutes,
             })
     except Exception as e:
         print(f"Tavily course search error: {e}")
@@ -242,11 +308,20 @@ async def search_resources(req: TopicRequest):
         videos_future = loop.run_in_executor(executor, _search_youtube_videos, req.topic)
         courses_future = loop.run_in_executor(executor, _search_free_courses, req.topic)
         videos, courses = await asyncio.gather(videos_future, courses_future)
+
+        total_video_minutes = sum(v.get("estimated_minutes", 20) for v in videos)
+        total_course_minutes = sum(c.get("estimated_minutes", 120) for c in courses)
+
         return {
             "topic": req.topic,
             "videos": videos,
             "courses": courses,
             "total_found": len(videos) + len(courses),
+            "estimated_minutes": {
+                "videos": total_video_minutes,
+                "courses": total_course_minutes,
+                "total": total_video_minutes + total_course_minutes,
+            },
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search error: {str(e)}")
@@ -259,31 +334,42 @@ async def generate_path(req: PathRequest):
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
     try:
         resources_text = ""
+        total_estimated = 0
+
         if req.videos:
             resources_text += "YOUTUBE VIDEOS:\n"
             for i, v in enumerate(req.videos, 1):
-                resources_text += f'{i}. "{v["title"]}" — {v["url"]}\n'
+                mins = v.get("estimated_minutes", 20)
+                total_estimated += mins
+                resources_text += f'{i}. "{v["title"]}" — {v["url"]} (~{mins} min)\n'
                 if v.get('description'):
                     resources_text += f'   {v["description"][:150]}\n'
 
         if req.courses:
             resources_text += "\nFREE COURSES & TUTORIALS:\n"
             for i, c in enumerate(req.courses, 1):
-                resources_text += f'{i}. "{c["title"]}" ({c["platform"]}) — {c["url"]}\n'
+                mins = c.get("estimated_minutes", 120)
+                total_estimated += mins
+                resources_text += f'{i}. "{c["title"]}" ({c["platform"]}) — {c["url"]} (~{mins} min)\n'
                 if c.get('description'):
                     resources_text += f'   {c["description"][:150]}\n'
 
-        prompt = f"""You are an expert curriculum designer. A student wants to learn "{req.topic}" in sessions of {req.duration} minutes.
+        prompt = f"""You are an expert curriculum designer. A student wants to learn "{req.topic}".
+Their preferred study session length is {req.duration} minutes per sitting.
+The selected resources have a combined estimated duration of ~{total_estimated} minutes.
 
 These real resources were found online:
 {resources_text}
 
 Create a structured learning path using ONLY resources from the list above (use their exact titles and URLs). Organise them into 2-4 progressive phases.
 
+For each resource, set estimated_minutes to a realistic watch/read time (use the hint in parentheses as a guide).
+
 Return ONLY valid JSON — no markdown fences, no extra text:
 {{
   "title": "Learning Path: {req.topic}",
   "overview": "2-3 sentence motivating description of this learning journey",
+  "total_estimated_minutes": {total_estimated},
   "phases": [
     {{
       "id": "1",
